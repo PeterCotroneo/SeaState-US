@@ -1,0 +1,15 @@
+[general]
+name=SeaState
+qgisMinimumVersion=3.28
+description=Load NOAA coastal observations — tides, water levels, predictions, and NDBC buoys — as time-aware QGIS layers.
+about=SeaState pulls live data from NOAA CO-OPS (Tides & Currents) and the National Data Buoy Center (NDBC) into QGIS as styled, Temporal-Controller-aware point layers, with CSV export. Uses keyless public APIs — no account required.
+version=0.1.0
+author=Peter Cotroneo
+email=geopetrus@gmail.com
+tracker=https://github.com/PeterCotroneo/SeaState/issues
+repository=https://github.com/PeterCotroneo/SeaState
+homepage=https://github.com/PeterCotroneo/SeaState
+category=Plugins
+experimental=True
+deprecated=False
+tags=noaa,ocean,tides,coastal,buoy,ndbc,marine,water level,temporal
