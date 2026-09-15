@@ -60,7 +60,7 @@ class SeaStatePlugin:
         if checked:
             if self.dock is None:
                 self.dock = self._build_dock()
-                self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock)
+                self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
             self.dock.show()
         elif self.dock is not None:
             self.dock.hide()
@@ -129,7 +129,7 @@ class SeaStatePlugin:
         project = QgsProject.instance()
         added = 0
 
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             if self.cb_water_level.isChecked() or self.cb_predictions.isChecked():
                 stations = [s for s in coops.list_stations()
