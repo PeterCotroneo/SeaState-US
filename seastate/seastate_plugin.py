@@ -23,6 +23,8 @@ from qgis.core import (
     QgsProject,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
+    QgsMessageLog,
+    Qgis,
 )
 
 from .clients import coops, ndbc
@@ -121,54 +123,104 @@ class SeaStatePlugin:
         xmin, ymin, xmax, ymax = bbox
         return xmin <= lng <= xmax and ymin <= lat <= ymax
 
+    def _log(self, msg, level=Qgis.Info):
+        QgsMessageLog.logMessage(msg, "SeaState", level)
+
+    def _fresh_group(self):
+        """A clean 'SeaState' layer group, replacing any previous results."""
+        root = QgsProject.instance().layerTreeRoot()
+        existing = root.findGroup("SeaState")
+        if existing is not None:
+            root.removeChildNode(existing)
+        return root.insertGroup(0, "SeaState")
+
+    def _add(self, layer, group):
+        QgsProject.instance().addMapLayer(layer, False)
+        group.addLayer(layer)
+
     def _on_load(self):
         bar = self.iface.messageBar()
         bbox = self._canvas_bbox_wgs84()
         begin = self.date_begin.date().toString("yyyyMMdd")
         end = self.date_end.date().toString("yyyyMMdd")
-        project = QgsProject.instance()
+        self._log(f"Load: bbox={bbox} dates={begin}-{end}")
+
+        group = self._fresh_group()
         added = 0
+        problems = []
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
+            # --- CO-OPS (each station/source isolated so one failure isn't fatal) ---
             if self.cb_water_level.isChecked() or self.cb_predictions.isChecked():
-                stations = [s for s in coops.list_stations()
-                            if self._in_bbox(s["lat"], s["lng"], bbox)]
-                if not stations:
-                    bar.pushInfo("SeaState", "No CO-OPS stations in the current extent.")
+                try:
+                    stations = [s for s in coops.list_stations()
+                                if self._in_bbox(s["lat"], s["lng"], bbox)]
+                except Exception as exc:  # noqa: BLE001
+                    stations = []
+                    problems.append(f"CO-OPS station list: {exc}")
+                self._log(f"CO-OPS stations in extent: {len(stations)}")
+                if not stations and (self.cb_water_level.isChecked()
+                                     or self.cb_predictions.isChecked()):
+                    problems.append("No CO-OPS stations in the current extent.")
                 for s in stations[:MAX_COOPS_STATIONS]:
                     if self.cb_water_level.isChecked():
-                        rows = coops.water_level(s["id"], begin, end)
-                        if rows:
-                            project.addMapLayer(layers.build_water_level_layer(rows, s))
-                            added += 1
+                        try:
+                            rows = coops.water_level(s["id"], begin, end)
+                            if rows:
+                                self._add(layers.build_water_level_layer(rows, s), group)
+                                added += 1
+                            else:
+                                self._log(f"No water level for {s['id']} {s['name']}")
+                        except Exception as exc:  # noqa: BLE001
+                            problems.append(f"water level {s['name']}: {exc}")
+                            self._log(f"water level {s['id']} FAILED: {exc}", Qgis.Warning)
                     if self.cb_predictions.isChecked():
-                        rows = coops.predictions(s["id"], begin, end)
-                        if rows:
-                            project.addMapLayer(layers.build_predictions_layer(rows, s))
-                            added += 1
+                        try:
+                            rows = coops.predictions(s["id"], begin, end)
+                            if rows:
+                                self._add(layers.build_predictions_layer(rows, s), group)
+                                added += 1
+                            else:
+                                self._log(f"No predictions for {s['id']} {s['name']}")
+                        except Exception as exc:  # noqa: BLE001
+                            problems.append(f"predictions {s['name']}: {exc}")
+                            self._log(f"predictions {s['id']} FAILED: {exc}", Qgis.Warning)
 
+            # --- NDBC (fully independent of the CO-OPS block above) ---
             if self.cb_ndbc.isChecked():
-                buoys = [b for b in ndbc.list_stations()
-                         if self._in_bbox(b["lat"], b["lon"], bbox)]
-                records = []
-                for b in buoys[:MAX_NDBC_STATIONS]:
-                    obs = None
-                    try:
-                        obs = ndbc.latest_observation(b["id"])
-                    except Exception:
-                        pass
-                    records.append({**b, **(obs or {})})
-                if records:
-                    project.addMapLayer(layers.build_ndbc_layer(records))
-                    added += 1
-                else:
-                    bar.pushInfo("SeaState", "No NDBC buoys in the current extent.")
-
-            if added:
-                bar.pushSuccess("SeaState", f"Loaded {added} layer(s). "
-                                "Use the Temporal Controller to animate CO-OPS layers.")
-        except Exception as exc:  # noqa: BLE001 - surface any failure to the user
-            bar.pushCritical("SeaState", f"Load failed: {exc}")
+                try:
+                    buoys = [b for b in ndbc.list_stations()
+                             if self._in_bbox(b["lat"], b["lon"], bbox)]
+                    self._log(f"NDBC buoys in extent: {len(buoys)}")
+                    records = []
+                    for b in buoys[:MAX_NDBC_STATIONS]:
+                        try:
+                            obs = ndbc.latest_observation(b["id"])
+                        except Exception as exc:  # noqa: BLE001
+                            obs = None
+                            self._log(f"NDBC obs {b['id']} failed: {exc}", Qgis.Warning)
+                        records.append({**b, **(obs or {})})
+                    if records:
+                        self._add(layers.build_ndbc_layer(records), group)
+                        added += 1
+                    else:
+                        problems.append("No NDBC buoys in the current extent.")
+                except Exception as exc:  # noqa: BLE001
+                    problems.append(f"NDBC: {exc}")
+                    self._log(f"NDBC block FAILED: {exc}", Qgis.Warning)
         finally:
             QApplication.restoreOverrideCursor()
+
+        if added == 0 and group is not None:
+            QgsProject.instance().layerTreeRoot().removeChildNode(group)
+
+        if added:
+            note = f"Loaded {added} layer(s)."
+            if problems:
+                note += f" {len(problems)} issue(s) — see Log Messages (SeaState)."
+            bar.pushSuccess("SeaState", note)
+        elif problems:
+            bar.pushWarning("SeaState", "; ".join(problems[:3]))
+        else:
+            bar.pushInfo("SeaState", "Nothing to load — check a data source.")
