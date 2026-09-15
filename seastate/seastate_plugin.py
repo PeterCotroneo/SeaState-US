@@ -92,8 +92,9 @@ class SeaStatePlugin:
         )
         self.cb_ndbc = QCheckBox("Ocean buoys — wind, waves & temperature")
         self.cb_ndbc.setToolTip(
-            "Latest observations from NOAA NDBC offshore buoys: wind, wave "
-            "height and period, air and water temperature, and pressure."
+            "Readings over the selected time window from NOAA NDBC offshore "
+            "buoys: wind, wave height and period, air and water temperature, "
+            "and pressure. The live buoy feed spans only the most recent ~45 days."
         )
         self.cb_water_level.setChecked(True)
         for cb in (self.cb_water_level, self.cb_predictions, self.cb_ndbc):
@@ -123,7 +124,13 @@ class SeaStatePlugin:
         w_layout.addRow("To", self.date_end)
         layout.addWidget(window)
 
-        layout.addWidget(QLabel("Stations are loaded for the current map extent."))
+        extent_note = QLabel(
+            "Loads stations within the current map view, over the time window "
+            "above. All three layers are time-aware — open the Temporal "
+            "Controller (clock icon) to animate them."
+        )
+        extent_note.setWordWrap(True)
+        layout.addWidget(extent_note)
 
         self.load_button = QPushButton("Load")
         self.load_button.clicked.connect(self._on_load)
@@ -227,14 +234,22 @@ class SeaStatePlugin:
                     records = []
                     for b in buoys[:MAX_NDBC_STATIONS]:
                         try:
-                            obs = ndbc.latest_observation(b["id"])
+                            rows = ndbc.observations(b["id"], begin, end)
                         except Exception as exc:  # noqa: BLE001
-                            obs = None
+                            rows = []
                             self._log(f"NDBC obs {b['id']} failed: {exc}", Qgis.Warning)
-                        records.append({**b, **(obs or {})})
+                        for row in rows:
+                            records.append({
+                                "station_id": b["id"], "name": b["name"],
+                                "lat": b["lat"], "lon": b["lon"], **row,
+                            })
+                    self._log(f"NDBC readings in window: {len(records)}")
                     if records:
-                        self._add(layers.build_ndbc_layer(records), group)
+                        self._add(layers.build_ndbc_timeseries_layer(records), group)
                         added += 1
+                    elif buoys:
+                        problems.append("Buoys found, but no readings in the time "
+                                        "window (NDBC live feed only spans ~45 days).")
                     else:
                         problems.append("No NDBC buoys in the current extent.")
                 except Exception as exc:  # noqa: BLE001

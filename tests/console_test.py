@@ -46,16 +46,19 @@ check("predictions layer valid", pl.isValid())
 check("predictions temporal active", pl.temporalProperties().isActive())
 QgsProject.instance().addMapLayer(pl)
 
-# --- NDBC buoy (44008, off Nantucket) ---
+# --- NDBC buoy (44008, off Nantucket) — temporal time series over the window ---
 buoys = {b["id"]: b for b in ndbc.list_stations()}
 b = buoys.get("44008")
 check("NDBC station present", b is not None)
 if b:
-    obs = ndbc.latest_observation("44008")
-    rec = {**b, **(obs or {})}
-    nl = layers.build_ndbc_layer([rec])
+    rows = ndbc.observations("44008", begin, end)
+    check("NDBC windowed fetch", len(rows) > 0, f"({len(rows)} readings)")
+    records = [{"station_id": b["id"], "name": b["name"],
+                "lat": b["lat"], "lon": b["lon"], **r} for r in rows]
+    nl = layers.build_ndbc_timeseries_layer(records)
     check("NDBC layer valid", nl.isValid())
-    check("NDBC features", nl.featureCount() == 1, f"({nl.featureCount()})")
+    check("NDBC features == readings", nl.featureCount() == len(rows), f"({nl.featureCount()})")
+    check("NDBC temporal active", nl.temporalProperties().isActive())
     QgsProject.instance().addMapLayer(nl)
 
 passed = sum(1 for _, ok, _ in results if ok)

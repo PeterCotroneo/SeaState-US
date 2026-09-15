@@ -162,3 +162,42 @@ def build_ndbc_layer(records):
     layer.updateExtents()
     _graduate(layer, "wave_height_m", "Spectral")
     return layer
+
+
+def build_ndbc_timeseries_layer(records):
+    """Temporal buoy layer: one feature per (buoy, timestamp) reading.
+
+    records: dicts with station_id, name, lat, lon, a 'time' string
+    ('YYYY-MM-DD HH:MM', UTC) and the numeric obs fields. Animates on the
+    Temporal Controller like the CO-OPS layers.
+    """
+    fields = QgsFields()
+    fields.append(QgsField("station_id", QVariant.String))
+    fields.append(QgsField("name", QVariant.String))
+    fields.append(QgsField("time", QVariant.DateTime))
+    for num in _NDBC_NUMERIC:
+        fields.append(QgsField(num, QVariant.Double))
+    layer = _memory_point_layer("NDBC buoys (time series)", fields.toList())
+
+    feats = []
+    for rec in records:
+        try:
+            geom = QgsGeometry.fromPointXY(QgsPointXY(float(rec["lon"]), float(rec["lat"])))
+        except (TypeError, ValueError):
+            continue
+        f = QgsFeature(layer.fields())
+        f.setGeometry(geom)
+        attrs = [rec.get("station_id"), rec.get("name"), _parse_dt(rec.get("time", ""))]
+        for num in _NDBC_NUMERIC:
+            val = rec.get(num)
+            try:
+                attrs.append(float(val) if val is not None else None)
+            except (TypeError, ValueError):
+                attrs.append(None)
+        f.setAttributes(attrs)
+        feats.append(f)
+    layer.dataProvider().addFeatures(feats)
+    layer.updateExtents()
+    _apply_temporal_instant(layer, "time")
+    _graduate(layer, "wave_height_m", "Spectral")
+    return layer
