@@ -42,11 +42,11 @@ class SeaStatePlugin:
         self.dock = None
 
     def initGui(self):
-        self.action = QAction("SeaState", self.iface.mainWindow())
+        self.action = QAction("SeaState US", self.iface.mainWindow())
         self.action.setCheckable(True)
         self.action.toggled.connect(self._toggle_dock)
         self.iface.addToolBarIcon(self.action)
-        self.iface.addPluginToMenu("SeaState", self.action)
+        self.iface.addPluginToMenu("SeaState US", self.action)
 
     def unload(self):
         if self.dock is not None:
@@ -55,7 +55,7 @@ class SeaStatePlugin:
             self.dock = None
         if self.action is not None:
             self.iface.removeToolBarIcon(self.action)
-            self.iface.removePluginMenu("SeaState", self.action)
+            self.iface.removePluginMenu("SeaState US", self.action)
             self.action = None
 
     def _toggle_dock(self, checked):
@@ -68,19 +68,50 @@ class SeaStatePlugin:
             self.dock.hide()
 
     def _build_dock(self):
-        dock = QDockWidget("SeaState", self.iface.mainWindow())
+        dock = QDockWidget("SeaState US", self.iface.mainWindow())
         panel = QWidget()
         layout = QVBoxLayout(panel)
 
-        sources = QGroupBox("Data sources")
+        intro = QLabel(
+            "Live U.S. coastal observations from NOAA. Zoom the map to a "
+            "U.S. coast, choose what to load, and press Load."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        sources = QGroupBox("What to load")
         s_layout = QVBoxLayout(sources)
-        self.cb_water_level = QCheckBox("CO-OPS water level (observed)")
-        self.cb_predictions = QCheckBox("CO-OPS tide predictions (hi/lo)")
-        self.cb_ndbc = QCheckBox("NDBC buoys (wind, waves, met)")
+        self.cb_water_level = QCheckBox("Water levels — measured tide-gauge readings")
+        self.cb_water_level.setToolTip(
+            "Observed water level from NOAA CO-OPS coastal tide-gauge stations "
+            "(6-minute readings). Each station is a fixed gauge on a pier or dock."
+        )
+        self.cb_predictions = QCheckBox("Tide predictions — daily highs & lows")
+        self.cb_predictions.setToolTip(
+            "Predicted high- and low-tide times and heights from NOAA CO-OPS."
+        )
+        self.cb_ndbc = QCheckBox("Ocean buoys — wind, waves & temperature")
+        self.cb_ndbc.setToolTip(
+            "Latest observations from NOAA NDBC offshore buoys: wind, wave "
+            "height and period, air and water temperature, and pressure."
+        )
         self.cb_water_level.setChecked(True)
         for cb in (self.cb_water_level, self.cb_predictions, self.cb_ndbc):
             s_layout.addWidget(cb)
         layout.addWidget(sources)
+
+        about = QLabel(
+            "<b>Where this data comes from</b><br>"
+            "<b>Tides &amp; water levels</b> — NOAA <i>CO-OPS</i> "
+            "(Center for Operational Oceanographic Products and Services), the "
+            "national network of coastal tide-gauge stations.<br>"
+            "<b>Buoys</b> — NOAA <i>NDBC</i> (National Data Buoy Center), "
+            "offshore weather and wave buoys.<br>"
+            "Coverage: U.S. coasts, Great Lakes and territories."
+        )
+        about.setWordWrap(True)
+        about.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(about)
 
         window = QGroupBox("Time window")
         w_layout = QFormLayout(window)

@@ -1,10 +1,12 @@
-# SeaState
+# SeaState US
 
-A QGIS plugin that loads NOAA coastal observations — tides, water levels, tide
-predictions, and NDBC buoy data — into QGIS as styled, time-aware point layers,
-animated on the QGIS Temporal Controller, with CSV export.
+A QGIS plugin that loads U.S. NOAA coastal observations — tide-gauge water
+levels, tide predictions, and offshore buoy data — into QGIS as styled,
+time-aware point layers, animated on the QGIS Temporal Controller, with CSV
+export.
 
-Uses keyless public NOAA APIs. No account or token required.
+Coverage is U.S. coasts, Great Lakes and territories. Uses keyless public NOAA
+APIs — no account or token required.
 
 ## Why
 
