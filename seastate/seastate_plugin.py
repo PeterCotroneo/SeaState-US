@@ -18,12 +18,14 @@ from qgis.PyQt.QtWidgets import (
     QGroupBox,
     QFormLayout,
 )
-from qgis.PyQt.QtCore import Qt, QDate
+from qgis.PyQt.QtCore import Qt, QDate, QDateTime
 from qgis.core import (
     QgsProject,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsMessageLog,
+    QgsDateTimeRange,
+    QgsInterval,
     Qgis,
 )
 
@@ -176,6 +178,36 @@ class SeaStatePlugin:
         QgsProject.instance().addMapLayer(layer, False)
         group.addLayer(layer)
 
+    def _configure_temporal(self, group):
+        """Point the Temporal Controller at the data we just loaded and switch
+        it to animation mode, so the user only has to press play."""
+        # Union the min/max of every loaded layer's "time" field.
+        lo = hi = None
+        for child in group.findLayers():
+            layer = child.layer()
+            if layer is None:
+                continue
+            idx = layer.fields().indexOf("time")
+            if idx < 0:
+                continue
+            mn, mx = layer.minimumValue(idx), layer.maximumValue(idx)
+            if isinstance(mn, QDateTime) and mn.isValid():
+                lo = mn if lo is None or mn < lo else lo
+            if isinstance(mx, QDateTime) and mx.isValid():
+                hi = mx if hi is None or mx > hi else hi
+        if lo is None or hi is None:
+            return
+        try:
+            tc = self.iface.mapCanvas().temporalController()
+            tc.setTemporalExtents(QgsDateTimeRange(lo, hi))
+            tc.setFrameDuration(QgsInterval(3600))  # 1-hour steps
+            tc.setNavigationMode(Qgis.TemporalNavigationMode.Animated)
+            tc.rewindToStart()
+            self._log(f"Temporal range set {lo.toString('yyyy-MM-dd HH:mm')} "
+                      f"to {hi.toString('yyyy-MM-dd HH:mm')}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"Temporal controller setup skipped: {exc}", Qgis.Warning)
+
     def _on_load(self):
         bar = self.iface.messageBar()
         bbox = self._canvas_bbox_wgs84()
@@ -262,7 +294,9 @@ class SeaStatePlugin:
             QgsProject.instance().layerTreeRoot().removeChildNode(group)
 
         if added:
-            note = f"Loaded {added} layer(s)."
+            self._configure_temporal(group)
+            note = (f"Loaded {added} layer(s). Open the Temporal Controller "
+                    "(clock icon) and press play to animate.")
             if problems:
                 note += f" {len(problems)} issue(s) — see Log Messages (SeaState)."
             bar.pushSuccess("SeaState", note)
