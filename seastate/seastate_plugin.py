@@ -23,19 +23,17 @@ from qgis.PyQt.QtWidgets import (
     QFormLayout,
     QMessageBox,
 )
-from qgis.PyQt.QtCore import Qt, QDate, QDateTime
+from qgis.PyQt.QtCore import Qt, QDate
 from qgis.core import (
     QgsProject,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsMessageLog,
-    QgsDateTimeRange,
-    QgsInterval,
     Qgis,
 )
 
 from .clients import coops, ndbc
-from . import layers
+from . import layers, plot
 
 # v1 guardrails so a wide extent can't fire hundreds of requests.
 MAX_COOPS_STATIONS = 5
@@ -50,9 +48,9 @@ class SeaStatePlugin:
         self._checkboxes = {}          # key -> QCheckBox
         self._source_layers = {}       # key -> [QgsVectorLayer] currently loaded
         self._suspend_toggle = False   # guard against programmatic re-checks
-        self._temporal_range = None    # (lo, hi) QDateTimes of loaded data
         self._layer_key = {}           # layer id -> source key
         self._removing = False         # guard: we are the ones removing layers
+        self._plot_dialogs = []        # keep plot windows alive
 
     def initGui(self):
         self.action = QAction("SeaState US", self.iface.mainWindow())
@@ -121,8 +119,8 @@ class SeaStatePlugin:
 
         intro = QLabel(
             "Live U.S. coastal observations from NOAA. Zoom to a U.S. coast, "
-            "then tick a layer to load it. Points show right away; press "
-            "Animate to play them over time."
+            "then tick a layer to load it. Press Plot to chart the readings "
+            "over time."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -160,12 +158,12 @@ class SeaStatePlugin:
         self.refresh_button.clicked.connect(self._refresh)
         layout.addWidget(self.refresh_button)
 
-        self.animate_button = QPushButton("Animate over time ▶")
-        self.animate_button.setToolTip(
-            "Play the loaded readings as a time-lapse on the Temporal "
-            "Controller. Points show statically until you press this.")
-        self.animate_button.clicked.connect(self._animate)
-        layout.addWidget(self.animate_button)
+        self.plot_button = QPushButton("Plot over time")
+        self.plot_button.setToolTip(
+            "Open a chart of the loaded readings — value on the vertical axis, "
+            "time along the bottom.")
+        self.plot_button.clicked.connect(self._plot)
+        layout.addWidget(self.plot_button)
         layout.addStretch(1)
 
         dock.setWidget(panel)
@@ -283,7 +281,7 @@ class SeaStatePlugin:
                     node.visibilityChanged.connect(
                         lambda _n, k=key: self._on_node_visibility(k))
             self._source_layers[key] = built
-            self._configure_temporal()
+            self.iface.mapCanvas().refresh()
             label = self.LAYER_INFO[key][0].split(" — ")[0]
             note = f"Loaded {label} ({len(built)} layer(s))."
             if problems:
@@ -311,8 +309,6 @@ class SeaStatePlugin:
             self._cleanup_group()
         finally:
             self._removing = False
-        if reconfigure:
-            self._configure_temporal()
         self.iface.mapCanvas().refresh()  # repaint so removed markers disappear
 
     @staticmethod
@@ -376,7 +372,6 @@ class SeaStatePlugin:
         for key in emptied:
             self._set_checkbox(key, False)  # untick without triggering another remove
         self._cleanup_group()
-        self._configure_temporal()
         self.iface.mapCanvas().refresh()
 
     # --- per-source fetch/build ------------------------------------------
@@ -456,51 +451,27 @@ class SeaStatePlugin:
             return []
         return [layers.build_ndbc_timeseries_layer(records)]
 
-    # --- temporal controller ---------------------------------------------
-    def _configure_temporal(self):
-        """Remember the loaded data's time span and pre-range the Temporal
-        Controller, but leave navigation OFF so every point shows straight
-        away. Animation is opt-in via the Animate button."""
-        lo = hi = None
+    # --- plotting --------------------------------------------------------
+    def _plot(self):
+        """Chart the loaded readings — value vs time — in a window."""
+        bar = self.iface.messageBar()
+        if not self._source_layers:
+            bar.pushInfo("SeaState", "Load a layer first, then Plot.")
+            return
+        series = []
         for lyrs in self._source_layers.values():
             for layer in lyrs:
-                idx = layer.fields().indexOf("time")
-                if idx < 0:
-                    continue
-                mn, mx = layer.minimumValue(idx), layer.maximumValue(idx)
-                if isinstance(mn, QDateTime) and mn.isValid():
-                    lo = mn if lo is None or mn < lo else lo
-                if isinstance(mx, QDateTime) and mx.isValid():
-                    hi = mx if hi is None or mx > hi else hi
-        self._temporal_range = (lo, hi) if lo is not None and hi is not None else None
-        if self._temporal_range is None:
+                s = plot.layer_series(layer)
+                if s:
+                    series.append(s)
+        if not series:
+            bar.pushWarning("SeaState", "No plottable values in the loaded layers.")
             return
         try:
-            tc = self.iface.mapCanvas().temporalController()
-            # Off = the map shows all readings at once (no time filter).
-            tc.setNavigationMode(Qgis.TemporalNavigationMode.NavigationOff)
-            tc.setTemporalExtents(QgsDateTimeRange(lo, hi))
-            tc.setFrameDuration(QgsInterval(3600))
-            self._log(f"Temporal range {lo.toString('yyyy-MM-dd HH:mm')} "
-                      f"to {hi.toString('yyyy-MM-dd HH:mm')} (animation off)")
-        except Exception as exc:  # noqa: BLE001
-            self._log(f"Temporal controller setup skipped: {exc}", Qgis.Warning)
-
-    def _animate(self):
-        """Turn the loaded layers into a time-lapse on the Temporal Controller."""
-        bar = self.iface.messageBar()
-        if not self._temporal_range:
-            bar.pushInfo("SeaState", "Load a layer first, then Animate.")
+            dlg = plot.show_time_series(
+                self.iface.mainWindow(), "SeaState US — readings over time", series)
+        except plot.PlottingUnavailable as exc:
+            bar.pushWarning("SeaState", str(exc))
+            self._log(f"Plot failed: {exc}", Qgis.Warning)
             return
-        lo, hi = self._temporal_range
-        try:
-            tc = self.iface.mapCanvas().temporalController()
-            tc.setTemporalExtents(QgsDateTimeRange(lo, hi))
-            tc.setFrameDuration(QgsInterval(3600))  # 1-hour steps
-            tc.setNavigationMode(Qgis.TemporalNavigationMode.Animated)
-            tc.rewindToStart()
-            tc.playForward()
-            bar.pushInfo("SeaState", "Animating. Open the Temporal Controller "
-                         "(clock icon) to pause, scrub, or change the step.")
-        except Exception as exc:  # noqa: BLE001
-            bar.pushWarning("SeaState", f"Could not start animation: {exc}")
+        self._plot_dialogs.append(dlg)

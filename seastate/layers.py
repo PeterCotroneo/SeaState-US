@@ -83,7 +83,6 @@ def build_water_level_layer(rows, station):
         feats.append(f)
     layer.dataProvider().addFeatures(feats)
     layer.updateExtents()
-    _apply_temporal_instant(layer, "time")
     _graduate(layer, "water_level", "Blues")
     return layer
 
@@ -111,7 +110,6 @@ def build_predictions_layer(rows, station):
         feats.append(f)
     layer.dataProvider().addFeatures(feats)
     layer.updateExtents()
-    _apply_temporal_instant(layer, "time")
     _graduate(layer, "prediction", "Blues")
     return layer
 
@@ -198,6 +196,5 @@ def build_ndbc_timeseries_layer(records):
         feats.append(f)
     layer.dataProvider().addFeatures(feats)
     layer.updateExtents()
-    _apply_temporal_instant(layer, "time")
     _graduate(layer, "wave_height_m", "Spectral")
     return layer

@@ -2,8 +2,8 @@
 
 Run inside QGIS: Plugins -> Python Console -> Show Editor -> open this file ->
 Run (or paste the whole thing). It pulls live NOAA data, builds the real
-QgsVectorLayers, checks them, and adds them to the current project so you can
-see the points and scrub the Temporal Controller.
+QgsVectorLayers, checks them, adds them to the project, and verifies each
+yields a plottable time series.
 
 No GUI extent needed — it uses the Nantucket station (8449130) and a nearby buoy.
 """
@@ -15,7 +15,7 @@ if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
 from seastate.clients import coops, ndbc
-from seastate import layers
+from seastate import layers, plot
 from qgis.core import QgsProject
 
 results = []
@@ -35,7 +35,7 @@ check("water_level fetch", len(rows) > 0, f"({len(rows)} readings)")
 wl = layers.build_water_level_layer(rows, NANTUCKET)
 check("water_level layer valid", wl.isValid())
 check("water_level features", wl.featureCount() > 0, f"({wl.featureCount()})")
-check("water_level temporal active", wl.temporalProperties().isActive())
+check("water_level plottable", plot.layer_series(wl) is not None)
 QgsProject.instance().addMapLayer(wl)
 
 # --- CO-OPS predictions ---
@@ -43,7 +43,7 @@ preds = coops.predictions(NANTUCKET["id"], begin, end)
 check("predictions fetch", len(preds) > 0, f"({len(preds)} hi/lo)")
 pl = layers.build_predictions_layer(preds, NANTUCKET)
 check("predictions layer valid", pl.isValid())
-check("predictions temporal active", pl.temporalProperties().isActive())
+check("predictions plottable", plot.layer_series(pl) is not None)
 QgsProject.instance().addMapLayer(pl)
 
 # --- NDBC buoy (44008, off Nantucket) — temporal time series over the window ---
@@ -58,7 +58,7 @@ if b:
     nl = layers.build_ndbc_timeseries_layer(records)
     check("NDBC layer valid", nl.isValid())
     check("NDBC features == readings", nl.featureCount() == len(rows), f"({nl.featureCount()})")
-    check("NDBC temporal active", nl.temporalProperties().isActive())
+    check("NDBC plottable", plot.layer_series(nl) is not None)
     QgsProject.instance().addMapLayer(nl)
 
 passed = sum(1 for _, ok, _ in results if ok)
