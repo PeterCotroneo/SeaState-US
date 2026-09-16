@@ -1,8 +1,10 @@
-"""SeaState — main plugin class.
+"""SeaState US — main plugin class.
 
-Registers a toolbar button / menu entry that toggles a dock panel. The panel
-UI is a placeholder for v1: source pickers, a date range, and a Load button.
-Data loading is wired to the clients in ``seastate.clients`` as those land.
+Registers a toolbar button / menu entry that toggles a dock panel. Ticking a
+layer loads it immediately for the current map view and date range; unticking
+removes it. "Refresh for current view" re-pulls the ticked layers after the
+map or dates change. Data fetching lives in ``seastate.clients``; layer
+construction in ``seastate.layers``.
 """
 
 from qgis.PyQt.QtWidgets import (
@@ -11,12 +13,15 @@ from qgis.PyQt.QtWidgets import (
     QDockWidget,
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QLabel,
     QCheckBox,
     QDateEdit,
     QPushButton,
+    QToolButton,
     QGroupBox,
     QFormLayout,
+    QMessageBox,
 )
 from qgis.PyQt.QtCore import Qt, QDate, QDateTime
 from qgis.core import (
@@ -42,6 +47,9 @@ class SeaStatePlugin:
         self.iface = iface
         self.action = None
         self.dock = None
+        self._checkboxes = {}          # key -> QCheckBox
+        self._source_layers = {}       # key -> [QgsVectorLayer] currently loaded
+        self._suspend_toggle = False   # guard against programmatic re-checks
 
     def initGui(self):
         self.action = QAction("SeaState US", self.iface.mainWindow())
@@ -69,54 +77,65 @@ class SeaStatePlugin:
         elif self.dock is not None:
             self.dock.hide()
 
+    # Per-layer metadata shown by the ⓘ button.
+    LAYER_INFO = {
+        "water_level": (
+            "Water levels — NOAA CO-OPS",
+            "Measured water height at coastal tide-gauge stations, recorded every "
+            "6 minutes and referenced to the MLLW tidal datum. Each point is a "
+            "fixed gauge on a pier or dock.\n\n"
+            "Units: feet.\n"
+            "Coverage: U.S. coasts, Great Lakes and territories.\n\n"
+            "Source: NOAA Center for Operational Oceanographic Products and "
+            "Services (CO-OPS)."),
+        "predictions": (
+            "Tide predictions — NOAA CO-OPS",
+            "Predicted high- and low-tide times and heights (the 'hi/lo' product), "
+            "computed from each station's harmonic constituents.\n\n"
+            "Units: feet, MLLW datum.\n"
+            "Coverage: U.S. tide-prediction stations.\n\n"
+            "Source: NOAA CO-OPS."),
+        "ndbc": (
+            "Ocean buoys — NOAA NDBC",
+            "Observations from offshore weather and wave buoys: wind "
+            "direction/speed/gust, wave height and period, air and water "
+            "temperature, and barometric pressure.\n\n"
+            "The live feed spans roughly the most recent 45 days.\n"
+            "Coverage: U.S. waters plus some open-ocean and partner buoys.\n\n"
+            "Source: NOAA National Data Buoy Center (NDBC)."),
+    }
+
     def _build_dock(self):
         dock = QDockWidget("SeaState US", self.iface.mainWindow())
         panel = QWidget()
         layout = QVBoxLayout(panel)
 
         intro = QLabel(
-            "Live U.S. coastal observations from NOAA. Zoom the map to a "
-            "U.S. coast, choose what to load, and press Load."
+            "Live U.S. coastal observations from NOAA. Zoom to a U.S. coast, "
+            "then tick a layer to load it. Use Refresh after moving the map or "
+            "changing dates."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
-        sources = QGroupBox("What to load")
+        sources = QGroupBox("Layers")
         s_layout = QVBoxLayout(sources)
         self.cb_water_level = QCheckBox("Water levels — measured tide-gauge readings")
-        self.cb_water_level.setToolTip(
-            "Observed water level from NOAA CO-OPS coastal tide-gauge stations "
-            "(6-minute readings). Each station is a fixed gauge on a pier or dock."
-        )
+        self.cb_water_level.setToolTip("Observed 6-minute water level (NOAA CO-OPS).")
         self.cb_predictions = QCheckBox("Tide predictions — daily highs & lows")
-        self.cb_predictions.setToolTip(
-            "Predicted high- and low-tide times and heights from NOAA CO-OPS."
-        )
+        self.cb_predictions.setToolTip("Predicted high/low tides (NOAA CO-OPS).")
         self.cb_ndbc = QCheckBox("Ocean buoys — wind, waves & temperature")
-        self.cb_ndbc.setToolTip(
-            "Readings over the selected time window from NOAA NDBC offshore "
-            "buoys: wind, wave height and period, air and water temperature, "
-            "and pressure. The live buoy feed spans only the most recent ~45 days."
-        )
-        self.cb_water_level.setChecked(True)
-        for cb in (self.cb_water_level, self.cb_predictions, self.cb_ndbc):
-            s_layout.addWidget(cb)
+        self.cb_ndbc.setToolTip("Offshore buoy observations, last ~45 days (NOAA NDBC).")
+        self._checkboxes = {
+            "water_level": self.cb_water_level,
+            "predictions": self.cb_predictions,
+            "ndbc": self.cb_ndbc,
+        }
+        for key, cb in self._checkboxes.items():
+            s_layout.addLayout(self._source_row(key, cb))
         layout.addWidget(sources)
 
-        about = QLabel(
-            "<b>Where this data comes from</b><br>"
-            "<b>Tides &amp; water levels</b> — NOAA <i>CO-OPS</i> "
-            "(Center for Operational Oceanographic Products and Services), the "
-            "national network of coastal tide-gauge stations.<br>"
-            "<b>Buoys</b> — NOAA <i>NDBC</i> (National Data Buoy Center), "
-            "offshore weather and wave buoys.<br>"
-            "Coverage: U.S. coasts, Great Lakes and territories."
-        )
-        about.setWordWrap(True)
-        about.setStyleSheet("color: gray; font-size: 11px;")
-        layout.addWidget(about)
-
-        window = QGroupBox("Time window")
+        window = QGroupBox("Date range")
         w_layout = QFormLayout(window)
         self.date_begin = QDateEdit(QDate.currentDate().addDays(-7))
         self.date_end = QDateEdit(QDate.currentDate())
@@ -126,21 +145,32 @@ class SeaStatePlugin:
         w_layout.addRow("To", self.date_end)
         layout.addWidget(window)
 
-        extent_note = QLabel(
-            "Loads stations within the current map view, over the time window "
-            "above. All three layers are time-aware — open the Temporal "
-            "Controller (clock icon) to animate them."
-        )
-        extent_note.setWordWrap(True)
-        layout.addWidget(extent_note)
-
-        self.load_button = QPushButton("Load")
-        self.load_button.clicked.connect(self._on_load)
-        layout.addWidget(self.load_button)
+        self.refresh_button = QPushButton("Refresh for current view")
+        self.refresh_button.setToolTip(
+            "Re-load the ticked layers for the current map view and date range.")
+        self.refresh_button.clicked.connect(self._refresh)
+        layout.addWidget(self.refresh_button)
         layout.addStretch(1)
 
         dock.setWidget(panel)
         return dock
+
+    def _source_row(self, key, checkbox):
+        """A checkbox + ⓘ info button, wired to load/unload on toggle."""
+        row = QHBoxLayout()
+        row.addWidget(checkbox, 1)
+        info = QToolButton()
+        info.setText("ⓘ")  # circled i
+        info.setAutoRaise(True)
+        info.setToolTip("About this layer")
+        info.clicked.connect(lambda _=False, k=key: self._show_info(k))
+        row.addWidget(info, 0)
+        checkbox.toggled.connect(lambda checked, k=key: self._on_source_toggled(k, checked))
+        return row
+
+    def _show_info(self, key):
+        title, body = self.LAYER_INFO[key]
+        QMessageBox.information(self.iface.mainWindow(), title, body)
 
     def _canvas_bbox_wgs84(self):
         """Current canvas extent as (xmin, ymin, xmax, ymax) in lon/lat."""
@@ -166,35 +196,192 @@ class SeaStatePlugin:
     def _log(self, msg, level=Qgis.Info):
         QgsMessageLog.logMessage(msg, "SeaState", level)
 
-    def _fresh_group(self):
-        """A clean 'SeaState' layer group, replacing any previous results."""
+    def _dates(self):
+        return (self.date_begin.date().toString("yyyyMMdd"),
+                self.date_end.date().toString("yyyyMMdd"))
+
+    def _ensure_group(self):
         root = QgsProject.instance().layerTreeRoot()
-        existing = root.findGroup("SeaState")
-        if existing is not None:
-            root.removeChildNode(existing)
-        return root.insertGroup(0, "SeaState")
+        grp = root.findGroup("SeaState")
+        return grp if grp is not None else root.insertGroup(0, "SeaState")
 
     def _add(self, layer, group):
         QgsProject.instance().addMapLayer(layer, False)
         group.addLayer(layer)
 
-    def _configure_temporal(self, group):
-        """Point the Temporal Controller at the data we just loaded and switch
-        it to animation mode, so the user only has to press play."""
-        # Union the min/max of every loaded layer's "time" field.
+    def _set_checkbox(self, key, value):
+        cb = self._checkboxes.get(key)
+        if cb is None:
+            return
+        self._suspend_toggle = True
+        cb.setChecked(value)
+        self._suspend_toggle = False
+
+    # --- toggle handling -------------------------------------------------
+    def _on_source_toggled(self, key, checked):
+        if self._suspend_toggle:
+            return
+        if checked:
+            self._load_source(key)
+        else:
+            self._unload_source(key)
+
+    def _refresh(self):
+        keys = [k for k, cb in self._checkboxes.items() if cb.isChecked()]
+        if not keys:
+            self.iface.messageBar().pushInfo(
+                "SeaState", "Tick a layer first, then Refresh.")
+            return
+        for key in keys:
+            self._load_source(key)
+
+    def _load_source(self, key):
+        # Reloading a source clears its previous layers first.
+        if key in self._source_layers:
+            self._unload_source(key, reconfigure=False)
+
+        bbox = self._canvas_bbox_wgs84()
+        begin, end = self._dates()
+        self._log(f"Load {key}: bbox={bbox} dates={begin}-{end}")
+        problems = []
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            if key == "water_level":
+                built = self._build_water_level_layers(bbox, begin, end, problems)
+            elif key == "predictions":
+                built = self._build_predictions_layers(bbox, begin, end, problems)
+            elif key == "ndbc":
+                built = self._build_ndbc_layers(bbox, begin, end, problems)
+            else:
+                built = []
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        bar = self.iface.messageBar()
+        if built:
+            group = self._ensure_group()
+            for lyr in built:
+                self._add(lyr, group)
+            self._source_layers[key] = built
+            self._configure_temporal()
+            label = self.LAYER_INFO[key][0].split(" — ")[0]
+            note = f"Loaded {label} ({len(built)} layer(s))."
+            if problems:
+                note += f" {len(problems)} issue(s) — see Log Messages (SeaState)."
+            bar.pushSuccess("SeaState", note)
+        else:
+            # Nothing to show — untick so the box reflects reality.
+            self._set_checkbox(key, False)
+            bar.pushWarning("SeaState", problems[0] if problems
+                            else "Nothing found in the current view / date range.")
+
+    def _unload_source(self, key, reconfigure=True):
+        proj = QgsProject.instance()
+        for lyr in self._source_layers.pop(key, []):
+            try:
+                proj.removeMapLayer(lyr.id())
+            except Exception:  # noqa: BLE001
+                pass
+        if not self._source_layers:
+            root = proj.layerTreeRoot()
+            grp = root.findGroup("SeaState")
+            if grp is not None:
+                root.removeChildNode(grp)
+        if reconfigure:
+            self._configure_temporal()
+
+    # --- per-source fetch/build ------------------------------------------
+    def _coops_stations(self, bbox, problems):
+        try:
+            return [s for s in coops.list_stations()
+                    if self._in_bbox(s["lat"], s["lng"], bbox)]
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"CO-OPS station list: {exc}")
+            self._log(f"CO-OPS station list FAILED: {exc}", Qgis.Warning)
+            return []
+
+    def _build_water_level_layers(self, bbox, begin, end, problems):
+        stations = self._coops_stations(bbox, problems)
+        self._log(f"CO-OPS stations in view: {len(stations)}")
+        if not stations:
+            problems.append("No CO-OPS tide-gauge stations in the current view.")
+            return []
+        built = []
+        for s in stations[:MAX_COOPS_STATIONS]:
+            try:
+                rows = coops.water_level(s["id"], begin, end)
+                if rows:
+                    built.append(layers.build_water_level_layer(rows, s))
+                else:
+                    self._log(f"No water level for {s['id']} {s['name']}")
+            except Exception as exc:  # noqa: BLE001
+                problems.append(f"water level {s['name']}: {exc}")
+                self._log(f"water level {s['id']} FAILED: {exc}", Qgis.Warning)
+        return built
+
+    def _build_predictions_layers(self, bbox, begin, end, problems):
+        stations = self._coops_stations(bbox, problems)
+        self._log(f"CO-OPS stations in view: {len(stations)}")
+        if not stations:
+            problems.append("No CO-OPS tide-gauge stations in the current view.")
+            return []
+        built = []
+        for s in stations[:MAX_COOPS_STATIONS]:
+            try:
+                rows = coops.predictions(s["id"], begin, end)
+                if rows:
+                    built.append(layers.build_predictions_layer(rows, s))
+                else:
+                    self._log(f"No predictions for {s['id']} {s['name']}")
+            except Exception as exc:  # noqa: BLE001
+                problems.append(f"predictions {s['name']}: {exc}")
+                self._log(f"predictions {s['id']} FAILED: {exc}", Qgis.Warning)
+        return built
+
+    def _build_ndbc_layers(self, bbox, begin, end, problems):
+        try:
+            buoys = [b for b in ndbc.list_stations()
+                     if self._in_bbox(b["lat"], b["lon"], bbox)]
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"NDBC station list: {exc}")
+            self._log(f"NDBC station list FAILED: {exc}", Qgis.Warning)
+            return []
+        self._log(f"NDBC buoys in view: {len(buoys)}")
+        if not buoys:
+            problems.append("No NDBC buoys in the current view.")
+            return []
+        records = []
+        for b in buoys[:MAX_NDBC_STATIONS]:
+            try:
+                rows = ndbc.observations(b["id"], begin, end)
+            except Exception as exc:  # noqa: BLE001
+                rows = []
+                self._log(f"NDBC obs {b['id']} failed: {exc}", Qgis.Warning)
+            for row in rows:
+                records.append({"station_id": b["id"], "name": b["name"],
+                                "lat": b["lat"], "lon": b["lon"], **row})
+        self._log(f"NDBC readings in window: {len(records)}")
+        if not records:
+            problems.append("Buoys found, but no readings in the date range "
+                            "(the live buoy feed spans only ~45 days).")
+            return []
+        return [layers.build_ndbc_timeseries_layer(records)]
+
+    # --- temporal controller ---------------------------------------------
+    def _configure_temporal(self):
+        """Point the Temporal Controller at all currently loaded data and put
+        it in animation mode, so the user only has to press play."""
         lo = hi = None
-        for child in group.findLayers():
-            layer = child.layer()
-            if layer is None:
-                continue
-            idx = layer.fields().indexOf("time")
-            if idx < 0:
-                continue
-            mn, mx = layer.minimumValue(idx), layer.maximumValue(idx)
-            if isinstance(mn, QDateTime) and mn.isValid():
-                lo = mn if lo is None or mn < lo else lo
-            if isinstance(mx, QDateTime) and mx.isValid():
-                hi = mx if hi is None or mx > hi else hi
+        for lyrs in self._source_layers.values():
+            for layer in lyrs:
+                idx = layer.fields().indexOf("time")
+                if idx < 0:
+                    continue
+                mn, mx = layer.minimumValue(idx), layer.maximumValue(idx)
+                if isinstance(mn, QDateTime) and mn.isValid():
+                    lo = mn if lo is None or mn < lo else lo
+                if isinstance(mx, QDateTime) and mx.isValid():
+                    hi = mx if hi is None or mx > hi else hi
         if lo is None or hi is None:
             return
         try:
@@ -203,104 +390,7 @@ class SeaStatePlugin:
             tc.setFrameDuration(QgsInterval(3600))  # 1-hour steps
             tc.setNavigationMode(Qgis.TemporalNavigationMode.Animated)
             tc.rewindToStart()
-            self._log(f"Temporal range set {lo.toString('yyyy-MM-dd HH:mm')} "
+            self._log(f"Temporal range {lo.toString('yyyy-MM-dd HH:mm')} "
                       f"to {hi.toString('yyyy-MM-dd HH:mm')}")
         except Exception as exc:  # noqa: BLE001
             self._log(f"Temporal controller setup skipped: {exc}", Qgis.Warning)
-
-    def _on_load(self):
-        bar = self.iface.messageBar()
-        bbox = self._canvas_bbox_wgs84()
-        begin = self.date_begin.date().toString("yyyyMMdd")
-        end = self.date_end.date().toString("yyyyMMdd")
-        self._log(f"Load: bbox={bbox} dates={begin}-{end}")
-
-        group = self._fresh_group()
-        added = 0
-        problems = []
-
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            # --- CO-OPS (each station/source isolated so one failure isn't fatal) ---
-            if self.cb_water_level.isChecked() or self.cb_predictions.isChecked():
-                try:
-                    stations = [s for s in coops.list_stations()
-                                if self._in_bbox(s["lat"], s["lng"], bbox)]
-                except Exception as exc:  # noqa: BLE001
-                    stations = []
-                    problems.append(f"CO-OPS station list: {exc}")
-                self._log(f"CO-OPS stations in extent: {len(stations)}")
-                if not stations and (self.cb_water_level.isChecked()
-                                     or self.cb_predictions.isChecked()):
-                    problems.append("No CO-OPS stations in the current extent.")
-                for s in stations[:MAX_COOPS_STATIONS]:
-                    if self.cb_water_level.isChecked():
-                        try:
-                            rows = coops.water_level(s["id"], begin, end)
-                            if rows:
-                                self._add(layers.build_water_level_layer(rows, s), group)
-                                added += 1
-                            else:
-                                self._log(f"No water level for {s['id']} {s['name']}")
-                        except Exception as exc:  # noqa: BLE001
-                            problems.append(f"water level {s['name']}: {exc}")
-                            self._log(f"water level {s['id']} FAILED: {exc}", Qgis.Warning)
-                    if self.cb_predictions.isChecked():
-                        try:
-                            rows = coops.predictions(s["id"], begin, end)
-                            if rows:
-                                self._add(layers.build_predictions_layer(rows, s), group)
-                                added += 1
-                            else:
-                                self._log(f"No predictions for {s['id']} {s['name']}")
-                        except Exception as exc:  # noqa: BLE001
-                            problems.append(f"predictions {s['name']}: {exc}")
-                            self._log(f"predictions {s['id']} FAILED: {exc}", Qgis.Warning)
-
-            # --- NDBC (fully independent of the CO-OPS block above) ---
-            if self.cb_ndbc.isChecked():
-                try:
-                    buoys = [b for b in ndbc.list_stations()
-                             if self._in_bbox(b["lat"], b["lon"], bbox)]
-                    self._log(f"NDBC buoys in extent: {len(buoys)}")
-                    records = []
-                    for b in buoys[:MAX_NDBC_STATIONS]:
-                        try:
-                            rows = ndbc.observations(b["id"], begin, end)
-                        except Exception as exc:  # noqa: BLE001
-                            rows = []
-                            self._log(f"NDBC obs {b['id']} failed: {exc}", Qgis.Warning)
-                        for row in rows:
-                            records.append({
-                                "station_id": b["id"], "name": b["name"],
-                                "lat": b["lat"], "lon": b["lon"], **row,
-                            })
-                    self._log(f"NDBC readings in window: {len(records)}")
-                    if records:
-                        self._add(layers.build_ndbc_timeseries_layer(records), group)
-                        added += 1
-                    elif buoys:
-                        problems.append("Buoys found, but no readings in the time "
-                                        "window (NDBC live feed only spans ~45 days).")
-                    else:
-                        problems.append("No NDBC buoys in the current extent.")
-                except Exception as exc:  # noqa: BLE001
-                    problems.append(f"NDBC: {exc}")
-                    self._log(f"NDBC block FAILED: {exc}", Qgis.Warning)
-        finally:
-            QApplication.restoreOverrideCursor()
-
-        if added == 0 and group is not None:
-            QgsProject.instance().layerTreeRoot().removeChildNode(group)
-
-        if added:
-            self._configure_temporal(group)
-            note = (f"Loaded {added} layer(s). Open the Temporal Controller "
-                    "(clock icon) and press play to animate.")
-            if problems:
-                note += f" {len(problems)} issue(s) — see Log Messages (SeaState)."
-            bar.pushSuccess("SeaState", note)
-        elif problems:
-            bar.pushWarning("SeaState", "; ".join(problems[:3]))
-        else:
-            bar.pushInfo("SeaState", "Nothing to load — check a data source.")
