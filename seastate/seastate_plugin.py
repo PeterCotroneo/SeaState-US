@@ -9,7 +9,6 @@ construction in ``seastate.layers``.
 
 from qgis.PyQt.QtWidgets import (
     QAction,
-    QApplication,
     QDockWidget,
     QWidget,
     QVBoxLayout,
@@ -29,6 +28,8 @@ from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsMessageLog,
+    QgsApplication,
+    QgsTask,
     Qgis,
 )
 
@@ -38,6 +39,33 @@ from . import layers, plot
 # v1 guardrails so a wide extent can't fire hundreds of requests.
 MAX_COOPS_STATIONS = 5
 MAX_NDBC_STATIONS = 40
+
+
+class _FetchTask(QgsTask):
+    """Runs a network fetch off the main thread.
+
+    ``fetch_fn`` returns ``(data, problems)`` and must not touch the GUI.
+    ``on_done(task, ok)`` is called on the main thread when finished.
+    """
+
+    def __init__(self, description, fetch_fn, on_done):
+        super().__init__(description)
+        self._fetch_fn = fetch_fn
+        self._on_done = on_done
+        self.data = None
+        self.problems = []
+        self.error = None
+
+    def run(self):
+        try:
+            self.data, self.problems = self._fetch_fn()
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self.error = str(exc)
+            return False
+
+    def finished(self, result):
+        self._on_done(self, result)
 
 
 class SeaStatePlugin:
@@ -53,6 +81,7 @@ class SeaStatePlugin:
         self._plot_dialogs = []        # keep plot windows alive
         self._auto_enabled = True      # re-fetch loaded layers as the map moves
         self._auto_timer = None        # debounce for extentsChanged
+        self._tasks = {}               # key -> in-flight _FetchTask
 
     def initGui(self):
         self.action = QAction("SeaState US", self.iface.mainWindow())
@@ -291,28 +320,49 @@ class SeaStatePlugin:
             self._load_source(key, quiet=True)
 
     def _load_source(self, key, quiet=False):
-        # Reloading a source clears its previous layers first.
-        if key in self._source_layers:
-            self._unload_source(key, reconfigure=False)
-
+        """Fetch a source's data on a background thread; build layers when done."""
         bbox = self._canvas_bbox_wgs84()
         begin, end = self._dates()
         self._log(f"Load {key}: bbox={bbox} dates={begin}-{end}")
-        problems = []
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
+
+        def fetch():  # runs on a worker thread — network only, no GUI
+            problems = []
             if key == "water_level":
-                built = self._build_water_level_layers(bbox, begin, end, problems)
+                data = self._fetch_water_level(bbox, begin, end, problems)
             elif key == "predictions":
-                built = self._build_predictions_layers(bbox, begin, end, problems)
+                data = self._fetch_predictions(bbox, begin, end, problems)
             elif key == "ndbc":
-                built = self._build_ndbc_layers(bbox, begin, end, problems)
+                data = self._fetch_ndbc(bbox, begin, end, problems)
             else:
-                built = []
-        finally:
-            QApplication.restoreOverrideCursor()
+                data = None
+            return data, problems
+
+        task = _FetchTask(
+            f"SeaState: load {key}", fetch,
+            lambda t, ok, k=key, q=quiet: self._on_fetched(k, t, ok, q))
+        self._tasks[key] = task
+        QgsApplication.taskManager().addTask(task)
+
+    def _on_fetched(self, key, task, ok, quiet):
+        """Runs on the main thread once the background fetch finishes."""
+        if self._tasks.get(key) is not task:
+            return  # a newer request superseded this one
+        self._tasks.pop(key, None)
 
         bar = self.iface.messageBar()
+        if task.error:
+            self._log(f"{key} fetch failed: {task.error}", Qgis.Warning)
+            if not quiet:
+                bar.pushWarning("SeaState", f"{key}: {task.error}")
+            return
+
+        built = self._build_layers(key, task.data)
+        problems = task.problems or []
+
+        # Replace any previous layers for this source.
+        if key in self._source_layers:
+            self._unload_source(key, reconfigure=False)
+
         if built:
             group = self._ensure_group()
             for lyr in built:
@@ -331,13 +381,24 @@ class SeaStatePlugin:
                 bar.pushSuccess("SeaState", note)
         elif quiet:
             # Auto-refresh found nothing here — stay registered (and ticked) so
-            # panning back to data reloads it, but drop stale out-of-view layers.
+            # panning back to data reloads it.
             self._source_layers[key] = []
         else:
-            # Manual load with nothing to show — untick so the box reflects reality.
             self._set_checkbox(key, False)
             bar.pushWarning("SeaState", problems[0] if problems
                             else "Nothing found in the current view / date range.")
+
+    def _build_layers(self, key, data):
+        """Main-thread construction of QgsVectorLayers from fetched data."""
+        if not data:
+            return []
+        if key == "water_level":
+            return [layers.build_water_level_layer(rows, s) for s, rows in data]
+        if key == "predictions":
+            return [layers.build_predictions_layer(rows, s) for s, rows in data]
+        if key == "ndbc":
+            return [layers.build_ndbc_timeseries_layer(data)]
+        return []
 
     def _unload_source(self, key, reconfigure=True):
         proj = QgsProject.instance()
@@ -430,45 +491,48 @@ class SeaStatePlugin:
             self._log(f"CO-OPS station list FAILED: {exc}", Qgis.Warning)
             return []
 
-    def _build_water_level_layers(self, bbox, begin, end, problems):
+    def _fetch_water_level(self, bbox, begin, end, problems):
+        """Worker-thread fetch. Returns [(station, rows), ...]."""
         stations = self._coops_stations(bbox, problems)
         self._log(f"CO-OPS stations in view: {len(stations)}")
         if not stations:
             problems.append("No CO-OPS tide-gauge stations in the current view.")
             return []
-        built = []
+        out = []
         for s in stations[:MAX_COOPS_STATIONS]:
             try:
                 rows = coops.water_level(s["id"], begin, end)
                 if rows:
-                    built.append(layers.build_water_level_layer(rows, s))
+                    out.append((s, rows))
                 else:
                     self._log(f"No water level for {s['id']} {s['name']}")
             except Exception as exc:  # noqa: BLE001
                 problems.append(f"water level {s['name']}: {exc}")
                 self._log(f"water level {s['id']} FAILED: {exc}", Qgis.Warning)
-        return built
+        return out
 
-    def _build_predictions_layers(self, bbox, begin, end, problems):
+    def _fetch_predictions(self, bbox, begin, end, problems):
+        """Worker-thread fetch. Returns [(station, rows), ...]."""
         stations = self._coops_stations(bbox, problems)
         self._log(f"CO-OPS stations in view: {len(stations)}")
         if not stations:
             problems.append("No CO-OPS tide-gauge stations in the current view.")
             return []
-        built = []
+        out = []
         for s in stations[:MAX_COOPS_STATIONS]:
             try:
                 rows = coops.predictions(s["id"], begin, end)
                 if rows:
-                    built.append(layers.build_predictions_layer(rows, s))
+                    out.append((s, rows))
                 else:
                     self._log(f"No predictions for {s['id']} {s['name']}")
             except Exception as exc:  # noqa: BLE001
                 problems.append(f"predictions {s['name']}: {exc}")
                 self._log(f"predictions {s['id']} FAILED: {exc}", Qgis.Warning)
-        return built
+        return out
 
-    def _build_ndbc_layers(self, bbox, begin, end, problems):
+    def _fetch_ndbc(self, bbox, begin, end, problems):
+        """Worker-thread fetch. Returns a flat list of buoy reading records."""
         try:
             buoys = [b for b in ndbc.list_stations()
                      if self._in_bbox(b["lat"], b["lon"], bbox)]
@@ -494,8 +558,7 @@ class SeaStatePlugin:
         if not records:
             problems.append("Buoys found, but no readings in the date range "
                             "(the live buoy feed spans only ~45 days).")
-            return []
-        return [layers.build_ndbc_timeseries_layer(records)]
+        return records
 
     # --- plotting --------------------------------------------------------
     def _plot(self):
