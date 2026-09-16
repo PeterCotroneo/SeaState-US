@@ -50,6 +50,7 @@ class SeaStatePlugin:
         self._checkboxes = {}          # key -> QCheckBox
         self._source_layers = {}       # key -> [QgsVectorLayer] currently loaded
         self._suspend_toggle = False   # guard against programmatic re-checks
+        self._temporal_range = None    # (lo, hi) QDateTimes of loaded data
 
     def initGui(self):
         self.action = QAction("SeaState US", self.iface.mainWindow())
@@ -112,8 +113,8 @@ class SeaStatePlugin:
 
         intro = QLabel(
             "Live U.S. coastal observations from NOAA. Zoom to a U.S. coast, "
-            "then tick a layer to load it. Use Refresh after moving the map or "
-            "changing dates."
+            "then tick a layer to load it. Points show right away; press "
+            "Animate to play them over time."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -150,6 +151,13 @@ class SeaStatePlugin:
             "Re-load the ticked layers for the current map view and date range.")
         self.refresh_button.clicked.connect(self._refresh)
         layout.addWidget(self.refresh_button)
+
+        self.animate_button = QPushButton("Animate over time ▶")
+        self.animate_button.setToolTip(
+            "Play the loaded readings as a time-lapse on the Temporal "
+            "Controller. Points show statically until you press this.")
+        self.animate_button.clicked.connect(self._animate)
+        layout.addWidget(self.animate_button)
         layout.addStretch(1)
 
         dock.setWidget(panel)
@@ -369,8 +377,9 @@ class SeaStatePlugin:
 
     # --- temporal controller ---------------------------------------------
     def _configure_temporal(self):
-        """Point the Temporal Controller at all currently loaded data and put
-        it in animation mode, so the user only has to press play."""
+        """Remember the loaded data's time span and pre-range the Temporal
+        Controller, but leave navigation OFF so every point shows straight
+        away. Animation is opt-in via the Animate button."""
         lo = hi = None
         for lyrs in self._source_layers.values():
             for layer in lyrs:
@@ -382,15 +391,35 @@ class SeaStatePlugin:
                     lo = mn if lo is None or mn < lo else lo
                 if isinstance(mx, QDateTime) and mx.isValid():
                     hi = mx if hi is None or mx > hi else hi
-        if lo is None or hi is None:
+        self._temporal_range = (lo, hi) if lo is not None and hi is not None else None
+        if self._temporal_range is None:
             return
+        try:
+            tc = self.iface.mapCanvas().temporalController()
+            # Off = the map shows all readings at once (no time filter).
+            tc.setNavigationMode(Qgis.TemporalNavigationMode.NavigationOff)
+            tc.setTemporalExtents(QgsDateTimeRange(lo, hi))
+            tc.setFrameDuration(QgsInterval(3600))
+            self._log(f"Temporal range {lo.toString('yyyy-MM-dd HH:mm')} "
+                      f"to {hi.toString('yyyy-MM-dd HH:mm')} (animation off)")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"Temporal controller setup skipped: {exc}", Qgis.Warning)
+
+    def _animate(self):
+        """Turn the loaded layers into a time-lapse on the Temporal Controller."""
+        bar = self.iface.messageBar()
+        if not self._temporal_range:
+            bar.pushInfo("SeaState", "Load a layer first, then Animate.")
+            return
+        lo, hi = self._temporal_range
         try:
             tc = self.iface.mapCanvas().temporalController()
             tc.setTemporalExtents(QgsDateTimeRange(lo, hi))
             tc.setFrameDuration(QgsInterval(3600))  # 1-hour steps
             tc.setNavigationMode(Qgis.TemporalNavigationMode.Animated)
             tc.rewindToStart()
-            self._log(f"Temporal range {lo.toString('yyyy-MM-dd HH:mm')} "
-                      f"to {hi.toString('yyyy-MM-dd HH:mm')}")
+            tc.playForward()
+            bar.pushInfo("SeaState", "Animating. Open the Temporal Controller "
+                         "(clock icon) to pause, scrub, or change the step.")
         except Exception as exc:  # noqa: BLE001
-            self._log(f"Temporal controller setup skipped: {exc}", Qgis.Warning)
+            bar.pushWarning("SeaState", f"Could not start animation: {exc}")
