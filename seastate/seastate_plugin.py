@@ -23,7 +23,7 @@ from qgis.PyQt.QtWidgets import (
     QFormLayout,
     QMessageBox,
 )
-from qgis.PyQt.QtCore import Qt, QDate
+from qgis.PyQt.QtCore import Qt, QDate, QTimer
 from qgis.core import (
     QgsProject,
     QgsCoordinateReferenceSystem,
@@ -51,6 +51,8 @@ class SeaStatePlugin:
         self._layer_key = {}           # layer id -> source key
         self._removing = False         # guard: we are the ones removing layers
         self._plot_dialogs = []        # keep plot windows alive
+        self._auto_enabled = True      # re-fetch loaded layers as the map moves
+        self._auto_timer = None        # debounce for extentsChanged
 
     def initGui(self):
         self.action = QAction("SeaState US", self.iface.mainWindow())
@@ -60,12 +62,24 @@ class SeaStatePlugin:
         self.iface.addPluginToMenu("SeaState US", self.action)
         # Keep the plugin's checkboxes in sync when layers are removed in QGIS.
         QgsProject.instance().layersRemoved.connect(self._on_layers_removed)
+        # Debounced auto-refresh when the map view changes.
+        self._auto_timer = QTimer()
+        self._auto_timer.setSingleShot(True)
+        self._auto_timer.setInterval(700)
+        self._auto_timer.timeout.connect(self._auto_refresh)
+        self.iface.mapCanvas().extentsChanged.connect(self._schedule_auto_refresh)
 
     def unload(self):
         try:
             QgsProject.instance().layersRemoved.disconnect(self._on_layers_removed)
         except (TypeError, RuntimeError):
             pass
+        try:
+            self.iface.mapCanvas().extentsChanged.disconnect(self._schedule_auto_refresh)
+        except (TypeError, RuntimeError):
+            pass
+        if self._auto_timer is not None:
+            self._auto_timer.stop()
         if self.dock is not None:
             self.iface.removeDockWidget(self.dock)
             self.dock.deleteLater()
@@ -152,6 +166,14 @@ class SeaStatePlugin:
         w_layout.addRow("From", self.date_begin)
         w_layout.addRow("To", self.date_end)
         layout.addWidget(window)
+
+        self.cb_autoload = QCheckBox("Auto-load when the map moves")
+        self.cb_autoload.setChecked(self._auto_enabled)
+        self.cb_autoload.setToolTip(
+            "Re-fetch the loaded layers automatically after you pan or zoom "
+            "(a moment after you stop). Turn off if it feels heavy.")
+        self.cb_autoload.toggled.connect(self._set_autoload)
+        layout.addWidget(self.cb_autoload)
 
         self.refresh_button = QPushButton("Refresh for current view")
         self.refresh_button.setToolTip(
@@ -250,7 +272,25 @@ class SeaStatePlugin:
         for key in keys:
             self._load_source(key)
 
-    def _load_source(self, key):
+    def _set_autoload(self, enabled):
+        self._auto_enabled = enabled
+        if enabled:
+            self._schedule_auto_refresh()
+
+    def _schedule_auto_refresh(self):
+        """Debounce map-move events: restart the timer, fire once things settle."""
+        if not self._auto_enabled or not self._source_layers:
+            return
+        if self._auto_timer is not None:
+            self._auto_timer.start()
+
+    def _auto_refresh(self):
+        if not self._auto_enabled:
+            return
+        for key in list(self._source_layers.keys()):
+            self._load_source(key, quiet=True)
+
+    def _load_source(self, key, quiet=False):
         # Reloading a source clears its previous layers first.
         if key in self._source_layers:
             self._unload_source(key, reconfigure=False)
@@ -283,13 +323,18 @@ class SeaStatePlugin:
                         lambda _n, k=key: self._on_node_visibility(k))
             self._source_layers[key] = built
             self.iface.mapCanvas().refresh()
-            label = self.LAYER_INFO[key][0].split(" — ")[0]
-            note = f"Loaded {label} ({len(built)} layer(s))."
-            if problems:
-                note += f" {len(problems)} issue(s) — see Log Messages (SeaState)."
-            bar.pushSuccess("SeaState", note)
+            if not quiet:
+                label = self.LAYER_INFO[key][0].split(" — ")[0]
+                note = f"Loaded {label} ({len(built)} layer(s))."
+                if problems:
+                    note += f" {len(problems)} issue(s) — see Log Messages (SeaState)."
+                bar.pushSuccess("SeaState", note)
+        elif quiet:
+            # Auto-refresh found nothing here — stay registered (and ticked) so
+            # panning back to data reloads it, but drop stale out-of-view layers.
+            self._source_layers[key] = []
         else:
-            # Nothing to show — untick so the box reflects reality.
+            # Manual load with nothing to show — untick so the box reflects reality.
             self._set_checkbox(key, False)
             bar.pushWarning("SeaState", problems[0] if problems
                             else "Nothing found in the current view / date range.")
