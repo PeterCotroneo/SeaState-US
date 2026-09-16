@@ -507,12 +507,14 @@ class SeaStatePlugin:
         series = []
         for lyrs in self._source_layers.values():
             for layer in lyrs:
-                s = plot.layer_series(layer)
-                if s:
-                    series.append(s)
+                series.extend(plot.layer_series_list(layer))
         if not series:
             bar.pushWarning("SeaState", "No plottable values in the loaded layers.")
             return
+        series.sort(key=lambda s: s[0])
+        max_charts = 12
+        truncated = len(series) - max_charts
+        series = series[:max_charts]
         try:
             dlg = plot.show_time_series(
                 self.iface.mainWindow(), "SeaState US — readings over time", series)
@@ -521,3 +523,6 @@ class SeaStatePlugin:
             self._log(f"Plot failed: {exc}", Qgis.Warning)
             return
         self._plot_dialogs.append(dlg)
+        if truncated > 0:
+            bar.pushInfo("SeaState", f"Showing 12 charts; {truncated} more not "
+                         "shown — zoom in or load fewer stations.")

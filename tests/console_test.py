@@ -35,7 +35,7 @@ check("water_level fetch", len(rows) > 0, f"({len(rows)} readings)")
 wl = layers.build_water_level_layer(rows, NANTUCKET)
 check("water_level layer valid", wl.isValid())
 check("water_level features", wl.featureCount() > 0, f"({wl.featureCount()})")
-check("water_level plottable", plot.layer_series(wl) is not None)
+check("water_level plottable", len(plot.layer_series_list(wl)) > 0)
 QgsProject.instance().addMapLayer(wl)
 
 # --- CO-OPS predictions ---
@@ -43,7 +43,7 @@ preds = coops.predictions(NANTUCKET["id"], begin, end)
 check("predictions fetch", len(preds) > 0, f"({len(preds)} hi/lo)")
 pl = layers.build_predictions_layer(preds, NANTUCKET)
 check("predictions layer valid", pl.isValid())
-check("predictions plottable", plot.layer_series(pl) is not None)
+check("predictions plottable", len(plot.layer_series_list(pl)) > 0)
 QgsProject.instance().addMapLayer(pl)
 
 # --- NDBC buoy (44008, off Nantucket) — temporal time series over the window ---
@@ -58,7 +58,7 @@ if b:
     nl = layers.build_ndbc_timeseries_layer(records)
     check("NDBC layer valid", nl.isValid())
     check("NDBC features == readings", nl.featureCount() == len(rows), f"({nl.featureCount()})")
-    check("NDBC plottable", plot.layer_series(nl) is not None)
+    check("NDBC plottable", len(plot.layer_series_list(nl)) > 0)
     QgsProject.instance().addMapLayer(nl)
 
 passed = sum(1 for _, ok, _ in results if ok)

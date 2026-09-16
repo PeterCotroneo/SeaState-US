@@ -6,56 +6,76 @@ we raise PlottingUnavailable so the caller can show a friendly message.
 """
 
 from qgis.PyQt.QtWidgets import QDialog, QVBoxLayout, QScrollArea
+from qgis.core import NULL
 
 
 class PlottingUnavailable(RuntimeError):
     pass
 
 
-# Preferred value field per layer, most specific first, with axis label.
+# Preferred value field per layer, most specific first: (field, unit, metric).
 _PRIMARY = [
-    ("water_level", "Water level (ft)"),
-    ("prediction", "Predicted tide (ft)"),
-    ("wave_height_m", "Wave height (m)"),
-    ("wind_speed_ms", "Wind speed (m/s)"),
-    ("water_temp_c", "Water temp (°C)"),
+    ("water_level", "ft", "Water level"),
+    ("prediction", "ft", "Tide prediction"),
+    ("wave_height_m", "m", "Wave height"),
+    ("wind_speed_ms", "m/s", "Wind speed"),
+    ("water_temp_c", "°C", "Water temp"),
 ]
 
 
-def layer_series(layer):
-    """Extract a plottable series from a SeaState layer.
+def _clean(value):
+    return None if value == NULL else value
 
-    Returns (label, xs, ys, unit) sorted by time, or None if the layer has no
-    time field or no numeric readings in any candidate field.
+
+def layer_series_list(layer):
+    """Plottable series from a SeaState layer, one per station.
+
+    A single layer can hold many stations (e.g. all buoys), so we group by
+    station and return a list of (label, xs, ys, unit) — each label naming the
+    metric and the station. Returns [] if the layer has no time field or no
+    numeric readings.
     """
     fields = layer.fields()
     tidx = fields.indexOf("time")
     if tidx < 0:
-        return None
-    for fld, unit in _PRIMARY:
-        idx = fields.indexOf(fld)
-        if idx < 0:
+        return []
+    name_idx = fields.indexOf("name")
+    if name_idx < 0:
+        name_idx = fields.indexOf("station")
+    id_idx = fields.indexOf("station_id")
+
+    for fld, unit, metric in _PRIMARY:
+        vidx = fields.indexOf(fld)
+        if vidx < 0:
             continue
-        xs, ys = [], []
+        groups = {}  # station key -> {"name", "xs", "ys"}
         for feat in layer.getFeatures():
-            t = feat[tidx]
-            v = feat[idx]
             try:
-                dt = t.toPyDateTime()
+                dt = feat[tidx].toPyDateTime()
             except (AttributeError, TypeError):
                 continue
             try:
-                yv = float(v)
+                yv = float(feat[vidx])
             except (TypeError, ValueError):
                 continue
-            xs.append(dt)
-            ys.append(yv)
-        if xs:
-            order = sorted(range(len(xs)), key=lambda i: xs[i])
-            xs = [xs[i] for i in order]
-            ys = [ys[i] for i in order]
-            return (layer.name(), xs, ys, unit)
-    return None
+            name = _clean(feat[name_idx]) if name_idx >= 0 else None
+            key = _clean(feat[id_idx]) if id_idx >= 0 else name
+            if key is None:
+                key = layer.name()
+            g = groups.setdefault(key, {"name": name, "xs": [], "ys": []})
+            g["xs"].append(dt)
+            g["ys"].append(yv)
+        if groups:
+            out = []
+            for key, g in groups.items():
+                order = sorted(range(len(g["xs"])), key=lambda i: g["xs"][i])
+                xs = [g["xs"][i] for i in order]
+                ys = [g["ys"][i] for i in order]
+                station = g["name"] or key
+                out.append((f"{metric} — {station}", xs, ys, unit))
+            out.sort(key=lambda s: s[0])
+            return out
+    return []
 
 
 def _import_matplotlib():
