@@ -22,7 +22,10 @@ from qgis.PyQt.QtWidgets import (
     QFormLayout,
     QMessageBox,
 )
+import os
+
 from qgis.PyQt.QtCore import Qt, QDate, QTimer
+from qgis.PyQt.QtGui import QIcon
 from qgis.core import (
     QgsProject,
     QgsCoordinateReferenceSystem,
@@ -84,7 +87,8 @@ class SeaStatePlugin:
         self._tasks = {}               # key -> in-flight _FetchTask
 
     def initGui(self):
-        self.action = QAction("SeaState US", self.iface.mainWindow())
+        icon = QIcon(os.path.join(os.path.dirname(__file__), "icon.svg"))
+        self.action = QAction(icon, "SeaState US", self.iface.mainWindow())
         self.action.setCheckable(True)
         self.action.toggled.connect(self._toggle_dock)
         self.iface.addToolBarIcon(self.action)

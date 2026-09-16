@@ -11,6 +11,7 @@ tracker=https://github.com/PeterCotroneo/SeaState-US/issues
 repository=https://github.com/PeterCotroneo/SeaState-US
 homepage=https://github.com/PeterCotroneo/SeaState-US
 category=Plugins
+icon=icon.svg
 experimental=True
 deprecated=False
 tags=noaa,ocean,tides,coastal,buoy,ndbc,marine,water level,temporal
