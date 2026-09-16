@@ -4,8 +4,11 @@ A QGIS plugin that loads U.S. NOAA coastal data — tide-gauge water levels, tid
 predictions, and offshore buoy readings — as point layers on the map, and charts
 any of them as a time series.
 
-Coverage is U.S. coasts, Great Lakes and territories. Uses keyless public NOAA
-APIs — no account or token required.
+Uses keyless public NOAA APIs — no account or token required.
+
+<!-- Add screenshots to docs/ and they will render here. -->
+<!-- ![SeaState US panel with stations loaded on the map](docs/screenshot-map.png) -->
+<!-- ![A station's water level plotted over time](docs/screenshot-plot.png) -->
 
 ## What it loads
 
@@ -15,11 +18,15 @@ Three layer types, each fetched for the current map view and date range:
 | --- | --- | --- | --- |
 | **Water levels** | *Measured* water height at tide-gauge stations, every 6 minutes | feet, MLLW datum | NOAA CO-OPS |
 | **Tide predictions** | *Predicted* daily high/low tides (not measured) | feet, MLLW datum | NOAA CO-OPS |
-| **Ocean buoys** | Offshore buoy readings: wind, waves, air/water temperature, pressure | mixed (m, m/s, °C, hPa) | NOAA NDBC |
+| **Ocean buoys** | Offshore readings: wind, waves, air/water temperature, pressure | m, m/s, °C, hPa | NOAA NDBC |
 
-Water levels are **observations**; predictions are a **forecast/astronomical
-calculation** — they are different products and are kept as separate layers. The
-NDBC live buoy feed spans only the most recent ~45 days.
+Water levels are **observations**; predictions are an **astronomical
+calculation** — different products, kept as separate layers. The NDBC live buoy
+feed spans only the most recent ~45 days.
+
+**Coverage:** U.S. tidal coastal stations and territories (Puerto Rico, Guam,
+etc.). Great Lakes stations use a non-tidal datum (IGLD) and are **not supported
+yet** — see [Limitations](#limitations).
 
 ## Using it
 
@@ -28,35 +35,55 @@ NDBC live buoy feed spans only the most recent ~45 days.
 3. **Tick a layer** to load it for the current view and date range; untick to
    remove it. Use **Refresh for current view** after moving the map or changing
    dates.
-4. **Plot over time** opens a chart (one per loaded layer) of value vs. time.
+4. **Plot over time** charts the loaded data.
 
-Ticking loads immediately (a network fetch tied to the map view), so a wide
-extent or long date range can be slow. NOAA's 6-minute water-level product is
-capped at 31 days per request; longer ranges are fetched in chunks automatically.
+### What gets plotted
 
-## Install (development)
+Each loaded station or buoy becomes its **own chart**, stacked vertically in one
+scrollable window (they share the time axis). The value on each chart is:
 
-Tested on **QGIS 4.2** (macOS). Matplotlib (bundled with QGIS 4.2) is required
+- Water-level and prediction layers → water height (ft).
+- Buoy layers → wave height (m), falling back to wind speed or water temperature
+  when a buoy reports no waves.
+
+So loading three tide gauges gives three separate water-level charts; loading a
+buoy adds a wave-height chart below them. Multiple buoy measurements are not
+combined on one axis — one metric per chart keeps units honest.
+
+## Install
+
+Tested on **QGIS 4.2** (macOS). Matplotlib — bundled with QGIS 4.2 — is required
 for the plot.
 
-Symlink or copy the `seastate/` directory into your QGIS profile plugins folder,
-e.g. on macOS:
+Copy or symlink the `seastate/` directory into your QGIS profile plugins folder.
+On macOS:
 
-```
+```bash
 ln -s /path/to/SeaState-US/seastate \
   "$HOME/Library/Application Support/QGIS/QGIS4/profiles/default/python/plugins/seastate"
 ```
 
 Then enable **SeaState US** in Plugins → Manage and Install Plugins (tick "Show
-also experimental plugins" in that dialog's Settings tab, as this is flagged
-experimental).
+also experimental plugins" in that dialog's Settings tab).
 
 ## Data sources
 
 | Source | Feed | Auth |
 | --- | --- | --- |
 | CO-OPS tides & water levels | `api.tidesandcurrents.noaa.gov` (data + metadata APIs) | none |
-| NDBC buoys | `ndbc.noaa.gov` active-stations XML + realtime2 text | none |
+| NDBC buoys | `ndbc.noaa.gov` active-stations XML + `realtime2` text | none |
+
+NOAA's 6-minute water-level product is capped at 31 days per request; longer
+ranges are fetched in chunks automatically.
+
+## Limitations
+
+- **Fetching blocks the QGIS interface** until the request finishes. Start with a
+  small map area and a short date range. Moving fetching into a background task
+  is the top planned improvement.
+- **Great Lakes stations are not supported** (they use the IGLD datum rather than
+  the tidal MLLW datum this plugin requests).
+- No CSV export yet; the toolbar button has no icon.
 
 ## Layout
 
@@ -73,12 +100,6 @@ seastate/
 tests/
   console_test.py       run inside the QGIS Python Console
 ```
-
-## Status
-
-Working early release. Known rough edges: fetching runs on the main thread (a
-large pull briefly freezes the UI); no CSV export yet; the toolbar button has no
-icon.
 
 ## License
 

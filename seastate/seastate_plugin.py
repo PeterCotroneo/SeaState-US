@@ -91,8 +91,9 @@ class SeaStatePlugin:
             "Measured water height at coastal tide-gauge stations, recorded every "
             "6 minutes and referenced to the MLLW tidal datum. Each point is a "
             "fixed gauge on a pier or dock.\n\n"
-            "Units: feet.\n"
-            "Coverage: U.S. coasts, Great Lakes and territories.\n\n"
+            "Units: feet (MLLW datum).\n"
+            "Coverage: U.S. tidal coastal stations and territories. Great Lakes "
+            "stations (non-tidal IGLD datum) are not supported yet.\n\n"
             "Source: NOAA Center for Operational Oceanographic Products and "
             "Services (CO-OPS)."),
         "predictions": (
