@@ -6,9 +6,11 @@ any of them as a time series.
 
 Uses keyless public NOAA APIs — no account or token required.
 
-<!-- Add screenshots to docs/ and they will render here. -->
-<!-- ![SeaState US panel with stations loaded on the map](docs/screenshot-map.png) -->
-<!-- ![A station's water level plotted over time](docs/screenshot-plot.png) -->
+![SeaState US panel with NOAA buoys and stations loaded on the map](docs/screenshot-map.png)
+
+Plotting a station's readings over time:
+
+![Chatham water level plotted over the date range](docs/screenshot-plot.png)
 
 ## What it loads
 
