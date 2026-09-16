@@ -223,7 +223,7 @@ class SeaStatePlugin:
 
     def _add(self, layer, group):
         QgsProject.instance().addMapLayer(layer, False)
-        group.addLayer(layer)
+        return group.addLayer(layer)  # QgsLayerTreeLayer node
 
     def _set_checkbox(self, key, value):
         cb = self._checkboxes.get(key)
@@ -277,8 +277,11 @@ class SeaStatePlugin:
         if built:
             group = self._ensure_group()
             for lyr in built:
-                self._add(lyr, group)
+                node = self._add(lyr, group)
                 self._layer_key[lyr.id()] = key
+                if node is not None:
+                    node.visibilityChanged.connect(
+                        lambda _n, k=key: self._on_node_visibility(k))
             self._source_layers[key] = built
             self._configure_temporal()
             label = self.LAYER_INFO[key][0].split(" — ")[0]
@@ -327,6 +330,30 @@ class SeaStatePlugin:
         grp = root.findGroup("SeaState")
         if grp is not None:
             root.removeChildNode(grp)
+
+    def _on_node_visibility(self, key):
+        """Mirror a source's layer-visibility onto its plugin checkbox.
+
+        The box stays ticked while any of the source's layers is shown, and
+        unticks when they are all hidden (this only toggles the box — it does
+        not remove the layers)."""
+        if self._suspend_toggle:
+            return
+        root = QgsProject.instance().layerTreeRoot()
+        any_visible = False
+        for lyr in self._source_layers.get(key, []):
+            lid = self._safe_id(lyr)
+            if lid is None:
+                continue
+            node = root.findLayer(lid)
+            if node is not None and node.itemVisibilityChecked():
+                any_visible = True
+                break
+        cb = self._checkboxes.get(key)
+        if cb is None:
+            return
+        if any_visible != cb.isChecked():
+            self._set_checkbox(key, any_visible)
 
     def _on_layers_removed(self, ids):
         """A layer was removed in QGIS — keep the plugin checkboxes in sync."""
