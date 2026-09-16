@@ -68,7 +68,7 @@ def build_water_level_layer(rows, station):
     fields.append(QgsField("station", QVariant.String))
     fields.append(QgsField("time", QVariant.DateTime))
     fields.append(QgsField("water_level", QVariant.Double))
-    layer = _memory_point_layer(f"CO-OPS water level — {station['name']}", fields.toList())
+    layer = _memory_point_layer(f"Water level, ft (MLLW) — {station['name']}", fields.toList())
 
     pt = QgsGeometry.fromPointXY(QgsPointXY(float(station["lng"]), float(station["lat"])))
     feats = []
@@ -95,7 +95,7 @@ def build_predictions_layer(rows, station):
     fields.append(QgsField("time", QVariant.DateTime))
     fields.append(QgsField("prediction", QVariant.Double))
     fields.append(QgsField("hilo", QVariant.String))
-    layer = _memory_point_layer(f"Tide predictions — {station['name']}", fields.toList())
+    layer = _memory_point_layer(f"Tide predictions, ft (MLLW) — {station['name']}", fields.toList())
 
     pt = QgsGeometry.fromPointXY(QgsPointXY(float(station["lng"]), float(station["lat"])))
     feats = []
@@ -175,7 +175,7 @@ def build_ndbc_timeseries_layer(records):
     fields.append(QgsField("time", QVariant.DateTime))
     for num in _NDBC_NUMERIC:
         fields.append(QgsField(num, QVariant.Double))
-    layer = _memory_point_layer("NDBC buoys (time series)", fields.toList())
+    layer = _memory_point_layer("Ocean buoys — wave height, m", fields.toList())
 
     feats = []
     for rec in records:

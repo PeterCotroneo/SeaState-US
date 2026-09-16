@@ -118,9 +118,9 @@ class SeaStatePlugin:
         layout = QVBoxLayout(panel)
 
         intro = QLabel(
-            "Live U.S. coastal observations from NOAA. Zoom to a U.S. coast, "
-            "then tick a layer to load it. Press Plot to chart the readings "
-            "over time."
+            "U.S. coastal data from NOAA — observed water levels, tide "
+            "predictions, and buoy readings. Zoom to a U.S. coast, tick a "
+            "layer to load it, then Plot to chart it over time."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -129,9 +129,9 @@ class SeaStatePlugin:
         s_layout = QVBoxLayout(sources)
         self.cb_water_level = QCheckBox("Water levels — measured tide-gauge readings")
         self.cb_water_level.setToolTip("Observed 6-minute water level (NOAA CO-OPS).")
-        self.cb_predictions = QCheckBox("Tide predictions — daily highs & lows")
+        self.cb_predictions = QCheckBox("Tide predictions — daily highs and lows")
         self.cb_predictions.setToolTip("Predicted high/low tides (NOAA CO-OPS).")
-        self.cb_ndbc = QCheckBox("Ocean buoys — wind, waves & temperature")
+        self.cb_ndbc = QCheckBox("Ocean buoys — wind, waves and temperature")
         self.cb_ndbc.setToolTip("Offshore buoy observations, last ~45 days (NOAA NDBC).")
         self._checkboxes = {
             "water_level": self.cb_water_level,
