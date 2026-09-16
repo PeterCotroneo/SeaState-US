@@ -51,6 +51,8 @@ class SeaStatePlugin:
         self._source_layers = {}       # key -> [QgsVectorLayer] currently loaded
         self._suspend_toggle = False   # guard against programmatic re-checks
         self._temporal_range = None    # (lo, hi) QDateTimes of loaded data
+        self._layer_key = {}           # layer id -> source key
+        self._removing = False         # guard: we are the ones removing layers
 
     def initGui(self):
         self.action = QAction("SeaState US", self.iface.mainWindow())
@@ -58,8 +60,14 @@ class SeaStatePlugin:
         self.action.toggled.connect(self._toggle_dock)
         self.iface.addToolBarIcon(self.action)
         self.iface.addPluginToMenu("SeaState US", self.action)
+        # Keep the plugin's checkboxes in sync when layers are removed in QGIS.
+        QgsProject.instance().layersRemoved.connect(self._on_layers_removed)
 
     def unload(self):
+        try:
+            QgsProject.instance().layersRemoved.disconnect(self._on_layers_removed)
+        except (TypeError, RuntimeError):
+            pass
         if self.dock is not None:
             self.iface.removeDockWidget(self.dock)
             self.dock.deleteLater()
@@ -270,6 +278,7 @@ class SeaStatePlugin:
             group = self._ensure_group()
             for lyr in built:
                 self._add(lyr, group)
+                self._layer_key[lyr.id()] = key
             self._source_layers[key] = built
             self._configure_temporal()
             label = self.LAYER_INFO[key][0].split(" — ")[0]
@@ -285,18 +294,63 @@ class SeaStatePlugin:
 
     def _unload_source(self, key, reconfigure=True):
         proj = QgsProject.instance()
-        for lyr in self._source_layers.pop(key, []):
-            try:
-                proj.removeMapLayer(lyr.id())
-            except Exception:  # noqa: BLE001
-                pass
-        if not self._source_layers:
-            root = proj.layerTreeRoot()
-            grp = root.findGroup("SeaState")
-            if grp is not None:
-                root.removeChildNode(grp)
+        self._removing = True  # so our own removals don't re-enter the sync handler
+        try:
+            for lyr in self._source_layers.pop(key, []):
+                lid = self._safe_id(lyr)
+                if lid is None:
+                    continue
+                self._layer_key.pop(lid, None)
+                try:
+                    proj.removeMapLayer(lid)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._cleanup_group()
+        finally:
+            self._removing = False
         if reconfigure:
             self._configure_temporal()
+        self.iface.mapCanvas().refresh()  # repaint so removed markers disappear
+
+    @staticmethod
+    def _safe_id(layer):
+        try:
+            return layer.id()
+        except (RuntimeError, AttributeError):
+            return None
+
+    def _cleanup_group(self):
+        """Drop the empty 'SeaState' group once no sources remain."""
+        if self._source_layers:
+            return
+        root = QgsProject.instance().layerTreeRoot()
+        grp = root.findGroup("SeaState")
+        if grp is not None:
+            root.removeChildNode(grp)
+
+    def _on_layers_removed(self, ids):
+        """A layer was removed in QGIS — keep the plugin checkboxes in sync."""
+        if self._removing:
+            return
+        emptied = []
+        for lid in ids:
+            key = self._layer_key.pop(lid, None)
+            if key is None:
+                continue
+            remaining = [l for l in self._source_layers.get(key, [])
+                         if self._safe_id(l) not in (lid, None)]
+            if remaining:
+                self._source_layers[key] = remaining
+            else:
+                self._source_layers.pop(key, None)
+                emptied.append(key)
+        if not emptied:
+            return
+        for key in emptied:
+            self._set_checkbox(key, False)  # untick without triggering another remove
+        self._cleanup_group()
+        self._configure_temporal()
+        self.iface.mapCanvas().refresh()
 
     # --- per-source fetch/build ------------------------------------------
     def _coops_stations(self, bbox, problems):
