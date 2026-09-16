@@ -68,7 +68,9 @@ def build_water_level_layer(rows, station):
     fields.append(QgsField("station", QVariant.String))
     fields.append(QgsField("time", QVariant.DateTime))
     fields.append(QgsField("water_level", QVariant.Double))
-    layer = _memory_point_layer(f"Water level, ft (MLLW) — {station['name']}", fields.toList())
+    datum = station.get("datum", "MLLW")
+    layer = _memory_point_layer(
+        f"Water level, ft ({datum}) — {station['name']}", fields.toList())
 
     pt = QgsGeometry.fromPointXY(QgsPointXY(float(station["lng"]), float(station["lat"])))
     feats = []

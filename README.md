@@ -18,17 +18,18 @@ Three layer types, each fetched for the current map view and date range:
 
 | Layer | What it is | Units | Source |
 | --- | --- | --- | --- |
-| **Water levels** | *Measured* water height at tide-gauge stations, every 6 minutes | feet, MLLW datum | NOAA CO-OPS |
-| **Tide predictions** | *Predicted* daily high/low tides (not measured) | feet, MLLW datum | NOAA CO-OPS |
+| **Water levels** | *Measured* water height at tide-gauge stations, every 6 minutes | feet (MLLW; IGLD on the Great Lakes) | NOAA CO-OPS |
+| **Tide predictions** | *Predicted* daily high/low tides (not measured; coastal only) | feet, MLLW datum | NOAA CO-OPS |
 | **Ocean buoys** | Offshore readings: wind, waves, air/water temperature, pressure | m, m/s, °C, hPa | NOAA NDBC |
 
 Water levels are **observations**; predictions are an **astronomical
 calculation** — different products, kept as separate layers. The NDBC live buoy
 feed spans only the most recent ~45 days.
 
-**Coverage:** U.S. tidal coastal stations and territories (Puerto Rico, Guam,
-etc.). Great Lakes stations use a non-tidal datum (IGLD) and are **not supported
-yet** — see [Limitations](#limitations).
+**Coverage:** U.S. coasts, the Great Lakes, and territories (Puerto Rico, Guam,
+etc.). Coastal water levels use the MLLW tidal datum; Great Lakes use IGLD.
+Because the Great Lakes have no astronomical tides, **tide predictions are
+coastal-only**.
 
 ## Using it
 
@@ -80,12 +81,11 @@ ranges are fetched in chunks automatically.
 
 ## Limitations
 
-- **Fetching blocks the QGIS interface** until the request finishes. Start with a
-  small map area and a short date range. Moving fetching into a background task
-  is the top planned improvement.
-- **Great Lakes stations are not supported** (they use the IGLD datum rather than
-  the tidal MLLW datum this plugin requests).
-- No CSV export yet; the toolbar button has no icon.
+- A very large request (wide view × long date range × several layers) can take a
+  while. Fetching runs in the background so QGIS stays responsive, but the data
+  will simply appear once each fetch completes.
+- No CSV export (QGIS already exports any layer: right-click → Export → Save
+  Features As → CSV).
 
 ## Layout
 

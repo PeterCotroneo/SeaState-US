@@ -138,9 +138,9 @@ class SeaStatePlugin:
             "Measured water height at coastal tide-gauge stations, recorded every "
             "6 minutes and referenced to the MLLW tidal datum. Each point is a "
             "fixed gauge on a pier or dock.\n\n"
-            "Units: feet (MLLW datum).\n"
-            "Coverage: U.S. tidal coastal stations and territories. Great Lakes "
-            "stations (non-tidal IGLD datum) are not supported yet.\n\n"
+            "Units: feet. Coastal stations use the MLLW tidal datum; Great "
+            "Lakes stations use the IGLD datum.\n"
+            "Coverage: U.S. coasts, the Great Lakes, and territories.\n\n"
             "Source: NOAA Center for Operational Oceanographic Products and "
             "Services (CO-OPS)."),
         "predictions": (
@@ -148,7 +148,8 @@ class SeaStatePlugin:
             "Predicted high- and low-tide times and heights (the 'hi/lo' product), "
             "computed from each station's harmonic constituents.\n\n"
             "Units: feet, MLLW datum.\n"
-            "Coverage: U.S. tide-prediction stations.\n\n"
+            "Coverage: U.S. coastal tide stations. Not available for the Great "
+            "Lakes, which have no astronomical tides.\n\n"
             "Source: NOAA CO-OPS."),
         "ndbc": (
             "Ocean buoys — NOAA NDBC",
@@ -504,10 +505,11 @@ class SeaStatePlugin:
             return []
         out = []
         for s in stations[:MAX_COOPS_STATIONS]:
+            datum = "IGLD" if s.get("greatlakes") else "MLLW"  # Great Lakes are non-tidal
             try:
-                rows = coops.water_level(s["id"], begin, end)
+                rows = coops.water_level(s["id"], begin, end, datum=datum)
                 if rows:
-                    out.append((s, rows))
+                    out.append(({**s, "datum": datum}, rows))
                 else:
                     self._log(f"No water level for {s['id']} {s['name']}")
             except Exception as exc:  # noqa: BLE001
@@ -516,14 +518,22 @@ class SeaStatePlugin:
         return out
 
     def _fetch_predictions(self, bbox, begin, end, problems):
-        """Worker-thread fetch. Returns [(station, rows), ...]."""
+        """Worker-thread fetch. Returns [(station, rows), ...].
+
+        Great Lakes stations are non-tidal (no predictions), so they're skipped.
+        """
         stations = self._coops_stations(bbox, problems)
         self._log(f"CO-OPS stations in view: {len(stations)}")
         if not stations:
             problems.append("No CO-OPS tide-gauge stations in the current view.")
             return []
+        coastal = [s for s in stations if not s.get("greatlakes")]
+        if not coastal:
+            problems.append("Tide predictions aren't available for Great Lakes "
+                            "stations (they have no astronomical tides).")
+            return []
         out = []
-        for s in stations[:MAX_COOPS_STATIONS]:
+        for s in coastal[:MAX_COOPS_STATIONS]:
             try:
                 rows = coops.predictions(s["id"], begin, end)
                 if rows:

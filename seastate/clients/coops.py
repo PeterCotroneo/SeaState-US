@@ -36,11 +36,16 @@ def _date_chunks(begin_date, end_date, max_days):
 
 
 def list_stations(station_type="waterlevels"):
-    """Return [{id, name, lat, lng}, ...] for the current extent to filter."""
+    """Return [{id, name, lat, lng, greatlakes}, ...] for the current extent.
+
+    Great Lakes stations use the IGLD datum (not tidal MLLW) and have no tide
+    predictions, so callers branch on the greatlakes flag.
+    """
     url = f"{MDAPI}/stations.json?type={station_type}"
     data = _get_json(url)
     return [
-        {"id": s["id"], "name": s["name"], "lat": s["lat"], "lng": s["lng"]}
+        {"id": s["id"], "name": s["name"], "lat": s["lat"], "lng": s["lng"],
+         "greatlakes": bool(s.get("greatlakes"))}
         for s in data.get("stations", [])
     ]
 
