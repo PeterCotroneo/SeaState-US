@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Built plugin package for QGIS repo upload
+seastate.zip
