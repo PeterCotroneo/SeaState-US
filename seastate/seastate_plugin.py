@@ -167,9 +167,9 @@ class SeaStatePlugin:
         layout = QVBoxLayout(panel)
 
         intro = QLabel(
-            "U.S. coastal data from NOAA — observed water levels, tide "
-            "predictions, and buoy readings. Zoom to a U.S. coast, tick a "
-            "layer to load it, then Plot to chart it over time."
+            "U.S. coastal and Great Lakes data from NOAA — observed water "
+            "levels, tide predictions, and buoy readings. Zoom to a shoreline, "
+            "tick a layer to load it, then Plot to chart it over time."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
