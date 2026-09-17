@@ -416,8 +416,8 @@ class SeaStatePlugin:
                 self._layer_key.pop(lid, None)
                 try:
                     proj.removeMapLayer(lid)
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    self._log(f"remove layer {lid} failed: {exc}", Qgis.Warning)
             self._cleanup_group()
         finally:
             self._removing = False

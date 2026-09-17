@@ -7,18 +7,23 @@ Keyless public feeds, verified live 2026-09-14:
 The realtime feed is fixed-width text with 'MM' as the missing-value sentinel.
 """
 
-import xml.etree.ElementTree as ET
-from urllib.request import urlopen
+import re
+
+from ._http import fetch_bytes
 
 ACTIVE_STATIONS = "https://www.ndbc.noaa.gov/activestations.xml"
 REALTIME = "https://www.ndbc.noaa.gov/data/realtime2/{id}.txt"
 
 MISSING = "MM"
 
+# activestations.xml is a flat list of self-closing <station .../> elements.
+# Parse attributes directly rather than via an XML parser (avoids XXE surface).
+_STATION_RE = re.compile(r"<station\b([^>]*?)/?>", re.IGNORECASE)
+_ATTR_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
+
 
 def _get_text(url):
-    with urlopen(url, timeout=30) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+    return fetch_bytes(url).decode("utf-8", errors="replace")
 
 
 def list_stations(require_met=False):
@@ -26,20 +31,15 @@ def list_stations(require_met=False):
 
     Set require_met=True to keep only stations reporting meteorology.
     """
-    root = ET.fromstring(_get_text(ACTIVE_STATIONS))
+    text = _get_text(ACTIVE_STATIONS)
     out = []
-    for s in root.findall("station"):
-        rec = {
-            "id": s.get("id"),
-            "lat": s.get("lat"),
-            "lon": s.get("lon"),
-            "name": s.get("name"),
-            "type": s.get("type"),
-            "met": s.get("met"),
-            "currents": s.get("currents"),
-            "waterquality": s.get("waterquality"),
-            "dart": s.get("dart"),
-        }
+    for match in _STATION_RE.finditer(text):
+        attrs = dict(_ATTR_RE.findall(match.group(1)))
+        if not attrs.get("id"):
+            continue
+        rec = {k: attrs.get(k) for k in
+               ("id", "lat", "lon", "name", "type", "met",
+                "currents", "waterquality", "dart")}
         if require_met and rec["met"] != "y":
             continue
         out.append(rec)

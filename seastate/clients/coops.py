@@ -10,7 +10,8 @@ No account or token required.
 import json
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
-from urllib.request import urlopen
+
+from ._http import fetch_bytes
 
 MDAPI = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi"
 DATAGETTER = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
@@ -20,8 +21,7 @@ WATER_LEVEL_MAX_DAYS = 31
 
 
 def _get_json(url):
-    with urlopen(url, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    return json.loads(fetch_bytes(url).decode("utf-8"))
 
 
 def _date_chunks(begin_date, end_date, max_days):

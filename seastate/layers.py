@@ -8,9 +8,10 @@ Notes on QGIS 4 / Qt6: field types use QVariant.* (QGIS keeps this working for
 QgsField); temporal mode uses the scoped Qgis.VectorTemporalMode enum.
 """
 
-from qgis.PyQt.QtCore import QVariant, QDateTime, Qt
+from qgis.PyQt.QtCore import QVariant, QDateTime
 from qgis.core import (
     Qgis,
+    QgsMessageLog,
     QgsField,
     QgsFields,
     QgsFeature,
@@ -56,9 +57,9 @@ def _graduate(layer, value_field, ramp_name="Blues"):
             renderer.updateColorRamp(ramp)
         renderer.updateClasses(layer, 5)
         layer.setRenderer(renderer)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
         # Styling is cosmetic; never let it block the data load.
-        pass
+        QgsMessageLog.logMessage(f"styling skipped: {exc}", "SeaState", Qgis.Warning)
 
 
 def build_water_level_layer(rows, station):
