@@ -59,7 +59,7 @@ def _graduate(layer, value_field, ramp_name="Blues"):
         layer.setRenderer(renderer)
     except Exception as exc:  # noqa: BLE001
         # Styling is cosmetic; never let it block the data load.
-        QgsMessageLog.logMessage(f"styling skipped: {exc}", "SeaState", Qgis.Warning)
+        QgsMessageLog.logMessage(f"styling skipped: {exc}", "SeaState", Qgis.MessageLevel.Warning)
 
 
 def build_water_level_layer(rows, station):

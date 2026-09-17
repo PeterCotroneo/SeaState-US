@@ -264,7 +264,7 @@ class SeaStatePlugin:
         xmin, ymin, xmax, ymax = bbox
         return xmin <= lng <= xmax and ymin <= lat <= ymax
 
-    def _log(self, msg, level=Qgis.Info):
+    def _log(self, msg, level=Qgis.MessageLevel.Info):
         QgsMessageLog.logMessage(msg, "SeaState", level)
 
     def _dates(self):
@@ -356,7 +356,7 @@ class SeaStatePlugin:
 
         bar = self.iface.messageBar()
         if task.error:
-            self._log(f"{key} fetch failed: {task.error}", Qgis.Warning)
+            self._log(f"{key} fetch failed: {task.error}", Qgis.MessageLevel.Warning)
             if not quiet:
                 bar.pushWarning("SeaState", f"{key}: {task.error}")
             return
@@ -417,7 +417,7 @@ class SeaStatePlugin:
                 try:
                     proj.removeMapLayer(lid)
                 except Exception as exc:  # noqa: BLE001
-                    self._log(f"remove layer {lid} failed: {exc}", Qgis.Warning)
+                    self._log(f"remove layer {lid} failed: {exc}", Qgis.MessageLevel.Warning)
             self._cleanup_group()
         finally:
             self._removing = False
@@ -493,7 +493,7 @@ class SeaStatePlugin:
                     if self._in_bbox(s["lat"], s["lng"], bbox)]
         except Exception as exc:  # noqa: BLE001
             problems.append(f"CO-OPS station list: {exc}")
-            self._log(f"CO-OPS station list FAILED: {exc}", Qgis.Warning)
+            self._log(f"CO-OPS station list FAILED: {exc}", Qgis.MessageLevel.Warning)
             return []
 
     def _fetch_water_level(self, bbox, begin, end, problems):
@@ -514,7 +514,7 @@ class SeaStatePlugin:
                     self._log(f"No water level for {s['id']} {s['name']}")
             except Exception as exc:  # noqa: BLE001
                 problems.append(f"water level {s['name']}: {exc}")
-                self._log(f"water level {s['id']} FAILED: {exc}", Qgis.Warning)
+                self._log(f"water level {s['id']} FAILED: {exc}", Qgis.MessageLevel.Warning)
         return out
 
     def _fetch_predictions(self, bbox, begin, end, problems):
@@ -542,7 +542,7 @@ class SeaStatePlugin:
                     self._log(f"No predictions for {s['id']} {s['name']}")
             except Exception as exc:  # noqa: BLE001
                 problems.append(f"predictions {s['name']}: {exc}")
-                self._log(f"predictions {s['id']} FAILED: {exc}", Qgis.Warning)
+                self._log(f"predictions {s['id']} FAILED: {exc}", Qgis.MessageLevel.Warning)
         return out
 
     def _fetch_ndbc(self, bbox, begin, end, problems):
@@ -552,7 +552,7 @@ class SeaStatePlugin:
                      if self._in_bbox(b["lat"], b["lon"], bbox)]
         except Exception as exc:  # noqa: BLE001
             problems.append(f"NDBC station list: {exc}")
-            self._log(f"NDBC station list FAILED: {exc}", Qgis.Warning)
+            self._log(f"NDBC station list FAILED: {exc}", Qgis.MessageLevel.Warning)
             return []
         self._log(f"NDBC buoys in view: {len(buoys)}")
         if not buoys:
@@ -564,7 +564,7 @@ class SeaStatePlugin:
                 rows = ndbc.observations(b["id"], begin, end)
             except Exception as exc:  # noqa: BLE001
                 rows = []
-                self._log(f"NDBC obs {b['id']} failed: {exc}", Qgis.Warning)
+                self._log(f"NDBC obs {b['id']} failed: {exc}", Qgis.MessageLevel.Warning)
             for row in rows:
                 records.append({"station_id": b["id"], "name": b["name"],
                                 "lat": b["lat"], "lon": b["lon"], **row})
@@ -597,7 +597,7 @@ class SeaStatePlugin:
                 self.iface.mainWindow(), "SeaState US — readings over time", series)
         except plot.PlottingUnavailable as exc:
             bar.pushWarning("SeaState", str(exc))
-            self._log(f"Plot failed: {exc}", Qgis.Warning)
+            self._log(f"Plot failed: {exc}", Qgis.MessageLevel.Warning)
             return
         self._plot_dialogs.append(dlg)
         if truncated > 0:
